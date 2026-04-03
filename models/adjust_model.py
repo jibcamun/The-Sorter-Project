@@ -5,11 +5,11 @@ from pydantic import Field
 from .segment_model import PositionTuple
 
 
-AdjustActionPayload = Dict[str, Tuple[str, int]]
+AdjustActionPayload = Tuple[str, str, int] | Tuple[()]
 
 
 class AdjustActionMixin:
-    adjust: AdjustActionPayload = Field(default_factory=dict)
+    adjust: AdjustActionPayload = Field(default_factory=tuple)
 
 
 class AdjustObservationMixin:

@@ -10,6 +10,7 @@ except:
     from config.objects import OBJECTS
     from utils.rewards import compute_reward
 
+
 def _remove_object(state: SorterState, obj_name: str, pos: tuple):
     dims = OBJECTS[obj_name]["dims"]
     state.current_grid[
@@ -66,83 +67,178 @@ def build_adjust_candidates(observation: SorterObservation) -> Dict[str, list[in
     return adjustable_objects
 
 
-def _adjust_position(
-    state: SorterState,
-    obj: str,
-    init_pos: tuple,
-    new_pos: tuple,
-    dimns: tuple,
-    direction: str,
-):
-    wt_grid = state.weighted_grid
+def _in_bounds(grid, dims: tuple, pos: tuple) -> bool:
+    return not (
+        pos[0] < 0
+        or pos[1] < 0
+        or pos[2] < 0
+        or pos[0] + dims[0] > grid.shape[0]
+        or pos[1] + dims[1] > grid.shape[1]
+        or pos[2] + dims[2] > grid.shape[2]
+    )
+
+
+def _has_support(grid, dims: tuple, pos: tuple) -> bool:
+    if pos[2] == 0:
+        return True
+    below_slice = grid[
+        pos[0] : pos[0] + dims[0],
+        pos[1] : pos[1] + dims[1],
+        pos[2] - 1,
+    ]
+    return not any(below_slice == 0)
+
+
+def _is_legal_adjustment(state: SorterState, obj_name: str, new_pos: tuple) -> bool:
+    init_pos = state.objects_present[obj_name]
+    dims = tuple(OBJECTS[obj_name]["dims"])
+
+    is_adjustable, _ = _is_adjustable(state.current_grid, obj_name, init_pos[:3])
+    if not is_adjustable or not _in_bounds(state.current_grid, dims, new_pos):
+        return False
+
+    grid_without_object = state.current_grid.copy()
+    grid_without_object[
+        init_pos[0] : init_pos[0] + dims[0],
+        init_pos[1] : init_pos[1] + dims[1],
+        init_pos[2] : init_pos[2] + dims[2],
+    ] = 0
+
+    target_slice = grid_without_object[
+        new_pos[0] : new_pos[0] + dims[0],
+        new_pos[1] : new_pos[1] + dims[1],
+        new_pos[2] : new_pos[2] + dims[2],
+    ]
+
+    if any(target_slice != 0):
+        return False
+
+    return _has_support(grid_without_object, dims, new_pos)
+
+
+def _position_score(state: SorterState, obj_name: str, pos: tuple) -> float:
     reward_per_obj = 30.0 / len(state.objects_present)
-    is_adjust, msg = _is_adjustable(state.current_grid, obj, new_pos)
-    if is_adjust:
-        updated_pos = (*new_pos, init_pos[3])
-        _remove_object(state, obj, init_pos)
-        state.current_grid[
-            new_pos[0] : new_pos[0] + dimns[0],
-            new_pos[1] : new_pos[1] + dimns[1],
-            new_pos[2] : new_pos[2] + dimns[2],
-        ] = 1
-        state.positions_adjust[obj] = updated_pos
-        state.objects_present[obj] = updated_pos
-        compute_reward(
-            state,
-            mean(
-                wt_grid[
-                    new_pos[0] : new_pos[0] + dimns[0],
-                    new_pos[1] : new_pos[1] + dimns[1],
-                    new_pos[2] : new_pos[2] + dimns[2],
-                ]
-            )
-            * reward_per_obj,
-            f"adjust: Object '{obj}' adjusted {direction} succesfully , can be adjusted better to maximise reward",
+    dims = tuple(OBJECTS[obj_name]["dims"])
+    return (
+        mean(
+            state.weighted_grid[
+                pos[0] : pos[0] + dims[0],
+                pos[1] : pos[1] + dims[1],
+                pos[2] : pos[2] + dims[2],
+            ]
         )
+        * reward_per_obj
+    )
+
+
+def _best_adjustment_position(state: SorterState, obj_name: str) -> tuple | None:
+    init_pos = state.objects_present[obj_name]
+    dims = tuple(OBJECTS[obj_name]["dims"])
+    best_pos = None
+    best_score = _position_score(state, obj_name, init_pos)
+
+    for x in range(state.grid_dims[0] - dims[0] + 1):
+        for y in range(state.grid_dims[1] - dims[1] + 1):
+            for z in range(state.grid_dims[2] - dims[2] + 1):
+                new_pos = (x, y, z)
+                if new_pos == init_pos[:3]:
+                    continue
+                if not _is_legal_adjustment(state, obj_name, new_pos):
+                    continue
+                candidate_score = _position_score(state, obj_name, new_pos)
+                if candidate_score > best_score:
+                    best_score = candidate_score
+                    best_pos = new_pos
+
+    return best_pos
+
+
+def _adjustment_reward(
+    current_score: float, new_score: float, best_score: float, reward_per_obj: float
+) -> float:
+    if new_score < current_score:
+        reward = -(current_score - new_score) * reward_per_obj
+    elif new_score == current_score:
+        reward = 0.0
+    elif best_score <= current_score:
+        reward = 0.0
     else:
+        reward = (
+            (new_score - current_score) / (best_score - current_score)
+        ) * reward_per_obj
+
+    return max(-reward_per_obj, min(reward, reward_per_obj))
+
+
+def _is_adjust_done(
+    state: SorterState, object_to_check: Tuple[str, str, int] | Tuple[()]
+) -> bool:
+    if not object_to_check:
+        return False
+    obj_name = object_to_check[0]
+    return _best_adjustment_position(state, obj_name) is None
+
+
+def adjust(state: SorterState, adjustment: Tuple[str, str, int] | Tuple[()]):
+    state.done = False
+    reward_per_obj = 30.0 / len(state.objects_present)
+    if len(adjustment) != 3:
         compute_reward(
             state,
             -reward_per_obj,
-            f"adjust : Object '{obj}' did not adjust in '{direction}' due to {msg}",
+            "adjust: Exactly one object must be selected for adjustment.",
         )
+        return
 
+    obj, _direction, _amount = adjustment
+    if obj not in state.objects_present:
+        compute_reward(
+            state,
+            -reward_per_obj,
+            f"adjust: Object '{obj}' is not present in the grid.",
+        )
+        return
 
-def adjust(state: SorterState, adjustments: Dict[str, Tuple[str, int]]):
-    reward_per_obj = 30.0 / len(state.objects_present)
-    for obj, obj_adjust_info in adjustments.items():
-        init_pos = state.objects_present[obj]
-        direction = obj_adjust_info[0]
-        mag = obj_adjust_info[1]
-        dimns = OBJECTS[obj]["dims"]
+    init_pos = state.objects_present[obj]
+    is_adjustable, msg = _is_adjustable(state.current_grid, obj, init_pos[:3])
+    if not is_adjustable:
+        compute_reward(
+            state,
+            -reward_per_obj,
+            f"adjust: Object '{obj}' can not be adjusted due to {msg}",
+        )
+        return
 
-        if direction == "RIGHT":
-            new_pos = (init_pos[0] + mag, init_pos[1], init_pos[2])
-            _adjust_position(state, obj, init_pos, new_pos, dimns, direction)
+    best_pos = _best_adjustment_position(state, obj)
+    if best_pos is None:
+        compute_reward(
+            state,
+            0.0,
+            f"adjust: Object '{obj}' is already at its best legal position.",
+        )
+        state.done = True
+        return
 
-        elif direction == "LEFT":
-            new_pos = (init_pos[0] - mag, init_pos[1], init_pos[2])
-            _adjust_position(state, obj, init_pos, new_pos, dimns, direction)
-
-        elif direction == "FORWARD":
-            new_pos = (init_pos[0], init_pos[1] + mag, init_pos[2])
-            _adjust_position(state, obj, init_pos, new_pos, dimns, direction)
-
-        elif direction == "BACKWARD":
-            new_pos = (init_pos[0], init_pos[1] - mag, init_pos[2])
-            _adjust_position(state, obj, init_pos, new_pos, dimns, direction)
-
-        elif direction == "UP":
-            new_pos = (init_pos[0], init_pos[1], init_pos[2] + mag)
-            _adjust_position(state, obj, init_pos, new_pos, dimns, direction)
-
-        elif direction == "DOWN":
-            new_pos = (init_pos[0], init_pos[1], init_pos[2] - mag)
-            _adjust_position(state, obj, init_pos, new_pos, dimns, direction)
-
-        else:
-            compute_reward(
-                state,
-                -reward_per_obj,
-                'adjust: Invalid choice of adjust, valid choices are: "RIGHT", "LEFT", "FORWARD", "BACKWARD", "UP" and "DOWN"',
-            )
-            return
+    current_score = _position_score(state, obj, init_pos[:3])
+    best_score = _position_score(state, obj, best_pos)
+    dimns = OBJECTS[obj]["dims"]
+    updated_pos = (*best_pos, init_pos[3])
+    _remove_object(state, obj, init_pos)
+    state.current_grid[
+        best_pos[0] : best_pos[0] + dimns[0],
+        best_pos[1] : best_pos[1] + dimns[1],
+        best_pos[2] : best_pos[2] + dimns[2],
+    ] = 1
+    state.positions_adjust[obj] = updated_pos
+    state.objects_present[obj] = updated_pos
+    new_score = _position_score(state, obj, best_pos)
+    compute_reward(
+        state,
+        _adjustment_reward(current_score, new_score, best_score, reward_per_obj),
+        (
+            f"adjust: Object '{obj}' adjusted successfully to a legal position."
+            if new_score < best_score
+            else f"adjust: Object '{obj}' adjusted successfully to its best legal position."
+        ),
+    )
+    state.done = _is_adjust_done(state, adjustment)

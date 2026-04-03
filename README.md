@@ -48,6 +48,7 @@ Our Sorter Project consists of ***_3_ different parts*** and ***_4_ different pr
 
 ### Demonstration
 
+
 ## Links
 ****Huggingface Link**** (to run `inference.py`): https://huggingface.co/spaces/Jibrann/app <br>
 ****Github Link**** (this page): https://github.com/jibcamun/Reinforcement-Learning-Object-Placement

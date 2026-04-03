@@ -26,7 +26,7 @@ STDOUT FORMAT
 
   Rules:
     - One [START] line at episode begin.
-    - One [STEP] line per step, immediately after env.step() returns.
+    - One [STEP] line per step, immediately after the graded step returns.
     - One [END] line after env.close(), always emitted (even on exception).
     - reward and rewards are formatted to 2 decimal places.
     - done and success are lowercase booleans: true or false.
@@ -55,6 +55,11 @@ from server.sorter_environment import SorterEnvironment
 from models import SorterObservation, SorterAction, SorterState
 
 try:
+    from graders import GradeResult, grade_task
+except ImportError:
+    from .graders import GradeResult, grade_task
+
+try:
     from tasks.adjust import build_adjust_candidates
 except ImportError:
     from .tasks.adjust import build_adjust_candidates
@@ -62,17 +67,14 @@ except ImportError:
 
 load_dotenv()
 
-IMAGE_NAME = os.getenv("IMAGE_NAME")  # If you are using docker image
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://integrate.api.nvidia.com/v1"
 MODEL_NAME = os.getenv("MODEL_NAME") or "openai/gpt-oss-120b"
-TASK_NAME = os.getenv("THE_SORTER_PROJECT_TASK", "adjust") or "adjust"
+TASK_NAME = os.getenv("THE_SORTER_PROJECT_TASK", "place") or "place"
 BENCHMARK = os.getenv("THE_SORTER_PROJECT_BENCHMARK", "the_sorter_project")
 MAX_STEPS = 8
 TEMPERATURE = 0.7
-MAX_TOKENS = 150
-SUCCESS_SCORE_THRESHOLD = 0.1  # normalized score in [0, 1]
 
 TASK_ACTION_FIELDS = {
     "segment": "segment",
@@ -86,10 +88,6 @@ TASK_OBSERVATION_FIELDS = {
     "adjust": {"grid_dims", "objects_present", "positions_adjust", "reward", "done"},
 }
 
-# Max possible reward: each token contributes 0.1, across all steps
-_MAX_REWARD_PER_STEP = MAX_TOKENS * 0.1
-MAX_TOTAL_REWARD = MAX_STEPS * _MAX_REWARD_PER_STEP
-
 SYSTEM_PROMPT = textwrap.dedent(
     f"""
     You are a professional logistician, facility expert and layout engineer.
@@ -98,17 +96,18 @@ SYSTEM_PROMPT = textwrap.dedent(
     Task definitions:
     - segment: identify object names from observed object positions
     - place: place all objects into an empty grid efficiently while respecting stackability, always return the name and position of all the objects, both the objects modified and not modified, do not return an empty dictionary
-    - adjust: adjust object positions so they do not overlap and improve placement score. Use the adjustable_objects field from the user message as context about which objects can be moved and where they currently are.
+    - adjust: return a single tuple of the form ["object_name", "DIRECTION", amount]. The environment will still apply the current adjustment logic for the selected object.
 
     Active action schema for this task:
     - segment: {{"segment": {{"object_name": [x, y, z, stackable], ...}}}}
     - place: {{"place": {{"object_name": [x, y, z, stackable], ...}}}}
-    - adjust: {{"adjust": {{"object_name": ["DIRECTION", amount], ...}}}}
+    - adjust: {{"adjust": ["object_name", "DIRECTION", amount]}}
 
     Return only the JSON object for the active task.
     Do not include inactive task fields.
     Do not include explanations, commentary, or extra keys.
     If there is no valid move, return an empty object for the active task.
+    For adjust, return exactly one tuple when valid_adjustments is not empty.
 
     Additional context:
     - Objects and dimensions: {OBJECTS}
@@ -117,7 +116,8 @@ SYSTEM_PROMPT = textwrap.dedent(
 
 
 def empty_action_json() -> str:
-    return json.dumps({TASK_ACTION_FIELDS[TASK_NAME]: {}})
+    empty_value = [] if TASK_NAME == "adjust" else {}
+    return json.dumps({TASK_ACTION_FIELDS[TASK_NAME]: empty_value})
 
 
 def latest_reward(observation: SorterObservation) -> float:
@@ -169,15 +169,15 @@ def build_user_prompt(
         if key in allowed_fields
     }
 
-    adjustable_objects: Dict[str, List[int]] = {}
+    valid_adjustments: Dict[str, List[Dict[str, Any]]] = {}
     if TASK_NAME == "adjust":
-        adjustable_objects = build_adjust_candidates(last_observation)
+        valid_adjustments = build_adjust_candidates(last_observation)
 
     return textwrap.dedent(
         f"""
         Step: {step}
         Last observation: {json.dumps(observation_payload, default=_json_default)}
-        Adjustable objects: {json.dumps(adjustable_objects, default=_json_default)}
+        Valid adjustments: {json.dumps(valid_adjustments, default=_json_default)}
         Last reward: {last_reward:.2f}
         Last reward reason: {last_reward_feedback}
         Previous steps:
@@ -241,6 +241,13 @@ def _normalize_action_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     action_field = TASK_ACTION_FIELDS[TASK_NAME]
     action_value = payload.get(action_field, payload)
 
+    if TASK_NAME == "adjust":
+        if action_value is None:
+            action_value = []
+        if not isinstance(action_value, (list, tuple)):
+            raise ValueError(f"'{action_field}' must be a JSON array.")
+        return {action_field: action_value}
+
     if action_value == [] or action_value is None:
         action_value = {}
     if not isinstance(action_value, dict):
@@ -256,6 +263,53 @@ def parse_action(message: str) -> SorterAction:
     return SorterAction(**_normalize_action_payload(payload))
 
 
+def _get_internal_state(env: SorterEnvironment) -> SorterState:
+    state = getattr(env, "_state", None)
+    if state is None:
+        raise RuntimeError("SorterEnvironment does not expose internal state for grading.")
+    return state
+
+
+def _build_observation(env: SorterEnvironment, state: SorterState) -> SorterObservation:
+    build_observation = getattr(env, "_return_observation", None)
+    if build_observation is None:
+        raise RuntimeError(
+            "SorterEnvironment does not expose observation construction for grading."
+        )
+    return build_observation(state)
+
+
+def _step_reward_chunk(
+    previous_rewards: List[float],
+    previous_feedback: List[str],
+    final_grade: GradeResult,
+) -> tuple[List[float], List[str]]:
+    reward_start = len(previous_rewards)
+    feedback_start = len(previous_feedback)
+    return (
+        final_grade.rewards[reward_start:],
+        final_grade.feedback[feedback_start:],
+    )
+
+
+def _summarize_step_feedback(step_feedback: List[str]) -> str:
+    if not step_feedback:
+        return "No feedback available."
+    return " | ".join(step_feedback)
+
+
+def apply_graded_step(
+    env: SorterEnvironment, task_name: str, action: SorterAction
+) -> tuple[SorterObservation, GradeResult]:
+    env.step_count += 1
+    internal_state = _get_internal_state(env)
+    internal_state.step_count += 1
+    graded_result = grade_task(task_name, internal_state, action)
+    env._state = graded_result.final_state
+    observation = _build_observation(env, graded_result.final_state)
+    return observation, graded_result
+
+
 def main():
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
@@ -266,6 +320,7 @@ def main():
     steps_taken = 0
     score = 0.0
     success = False
+    final_grade: Optional[GradeResult] = None
 
     log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
 
@@ -288,26 +343,36 @@ def main():
                 history,
             )
 
+            parse_error: Optional[str] = None
             try:
                 action = parse_action(message)
             except (JSONDecodeError, ValidationError, ValueError, TypeError) as exc:
                 print(f"[DEBUG] Action parse failed: {exc}", flush=True)
+                parse_error = str(exc)
                 action = SorterAction(**json.loads(empty_action_json()))
 
-            result = env.step(action)
+            previous_rewards = list(_get_internal_state(env).reward[0])
+            previous_feedback = list(_get_internal_state(env).reward[1])
+            result, final_grade = apply_graded_step(env, TASK_NAME, action)
+            step_rewards, step_feedback = _step_reward_chunk(
+                previous_rewards, previous_feedback, final_grade
+            )
 
             obs = result
-            reward = latest_reward(obs)
-            feedback = latest_feedback(obs)
+            reward = sum(step_rewards) if step_rewards else 0.0
+            feedback = _summarize_step_feedback(step_feedback)
 
-            done = result.done
+            done = final_grade.done
 
-            error = None
+            error = parse_error
+            if error is None and feedback.lower().startswith(f"{TASK_NAME} grading failed:"):
+                error = feedback
 
             rewards.append(reward)
             steps_taken = step
             last_observation = obs
             last_reward = reward
+            last_reward_feedback = feedback
 
             log_step(
                 step=step,
@@ -324,13 +389,12 @@ def main():
             if done:
                 break
 
-        score = sum(rewards) / len(rewards) if rewards else 0.0
-        if rewards:
-            min_reward = min(rewards)
-            max_reward = max(rewards)
-            reward_range = max_reward - min_reward
-            score = (score - min_reward) / reward_range if reward_range else 0.0
-        success = score >= SUCCESS_SCORE_THRESHOLD
+        if final_grade is not None:
+            score = final_grade.normalized_score
+            success = final_grade.passed
+        else:
+            score = 0.0
+            success = False
 
     finally:
         try:

@@ -14,12 +14,28 @@ except:
     from utils.grids import weighted_grid
 
 
+def _placement_score(weighted_grid, obj_name: str, pos: tuple) -> float:
+    dims = tuple(OBJECTS[obj_name]["dims"])
+    return mean(
+        weighted_grid[
+            pos[0] : pos[0] + dims[0],
+            pos[1] : pos[1] + dims[1],
+            pos[2] : pos[2] + dims[2],
+        ]
+    )
+
+
+def _is_place_done(state: SorterState) -> bool:
+    return set(state.positions_place.keys()) == set(state.objects_present.keys())
+
+
 def place(state: SorterState, placements: Dict[str, Tuple[int, int, int, bool]]):
     grid_dims = state.grid_dims
+    state.done = False
 
     grid = zeros(grid_dims)
-    state.weighted_grid = weighted_grid(grid_dims)
     wt_grid = state.weighted_grid
+    staged_positions = dict(state.positions_place)
 
     reward_per_obj = (
         50.0 / len(placements.keys()) if len(placements.keys()) > 0 else 0.0
@@ -31,11 +47,21 @@ def place(state: SorterState, placements: Dict[str, Tuple[int, int, int, bool]])
             -reward_per_obj,
             "place: All the objects present in the grid was not passed as input. It must be passed irrespective of whether the position is changed or not.",
         )
+        state.done = False
         return
 
-    objs_alrdy_present = state.positions_place
+    objs_alrdy_present = dict(state.positions_place)
 
     for obj, pos in placements.items():
+        if obj not in OBJECTS:
+            compute_reward(
+                state,
+                -reward_per_obj,
+                f"place: Object '{obj}' is not a valid known object",
+            )
+            state.done = False
+            return
+
         dimns = OBJECTS[obj]["dims"]
         stack = OBJECTS[obj]["stack"]
 
@@ -52,6 +78,7 @@ def place(state: SorterState, placements: Dict[str, Tuple[int, int, int, bool]])
                 -reward_per_obj,
                 f"place: Object '{obj}' is out of bounds with respect to grid",
             )
+            state.done = False
             return
 
         if all(
@@ -74,17 +101,16 @@ def place(state: SorterState, placements: Dict[str, Tuple[int, int, int, bool]])
                 ):
                     compute_reward(
                         state,
-                        mean(
-                            wt_grid[
-                                pos[0] : pos[0] + dimns[0],
-                                pos[1] : pos[1] + dimns[1],
-                                pos[2] : pos[2] + dimns[2],
-                            ]
-                        )
-                        * reward_per_obj,
+                        _placement_score(wt_grid, obj, pos) * reward_per_obj,
                         f"place: Object '{obj}' placed successfully",
                     )
-                    state.positions_place[obj] = pos
+                else:
+                    compute_reward(
+                        state,
+                        0.0,
+                        f"place: Object '{obj}' kept at its current valid placement",
+                    )
+                staged_positions[obj] = pos
             elif stack and all(
                 grid[
                     pos[0] : pos[0] + dimns[0],
@@ -104,17 +130,16 @@ def place(state: SorterState, placements: Dict[str, Tuple[int, int, int, bool]])
                 ):
                     compute_reward(
                         state,
-                        mean(
-                            wt_grid[
-                                pos[0] : pos[0] + dimns[0],
-                                pos[1] : pos[1] + dimns[1],
-                                pos[2] : pos[2] + dimns[2],
-                            ]
-                        )
-                        * reward_per_obj,
+                        _placement_score(wt_grid, obj, pos) * reward_per_obj,
                         f"place: Object '{obj}' placed successfully",
                     )
-                    state.positions_place[obj] = pos
+                else:
+                    compute_reward(
+                        state,
+                        0.0,
+                        f"place: Object '{obj}' kept at its current valid placement",
+                    )
+                staged_positions[obj] = pos
             else:
                 compute_reward(
                     state,
@@ -129,3 +154,5 @@ def place(state: SorterState, placements: Dict[str, Tuple[int, int, int, bool]])
             )
 
     state.current_grid = grid
+    state.positions_place = staged_positions
+    state.done = _is_place_done(state)

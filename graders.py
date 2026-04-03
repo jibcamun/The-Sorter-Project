@@ -1,0 +1,265 @@
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from typing import Any, Dict, Literal, Mapping
+
+try:
+    from .models import SorterAction, SorterObservation, SorterState
+    from .tasks.adjust import adjust as run_adjust
+    from .tasks.place import place as run_place
+    from .tasks.segment import segment as run_segment
+except ImportError:
+    from models import SorterAction, SorterObservation, SorterState
+    from tasks.adjust import adjust as run_adjust
+    from tasks.place import place as run_place
+    from tasks.segment import segment as run_segment
+
+
+TaskName = Literal["segment", "place", "adjust"]
+TASK_FIELDS = ("segment", "place", "adjust")
+
+TASK_MAX_SCORES: Dict[TaskName, float] = {
+    "segment": 20.0,
+    "place": 50.0,
+    "adjust": 30.0,
+}
+SUCCESS_SCORE_THRESHOLD = 0.1
+
+
+@dataclass(slots=True)
+class GradeResult:
+    task: TaskName
+    done: bool
+    raw_score: float
+    max_score: float
+    step_max_score: float
+    normalized_score: float
+    latest_reward: float
+    rewards: list[float]
+    feedback: list[str]
+    final_state: SorterState
+
+    @property
+    def passed(self) -> bool:
+        return self.normalized_score >= SUCCESS_SCORE_THRESHOLD
+
+    def to_dict(self) -> Dict[str, Any]:
+        payload = asdict(self)
+        payload["final_state"] = self.final_state.model_dump()
+        payload["passed"] = self.passed
+        return payload
+
+
+def _coerce_state(state: SorterState | SorterObservation | Mapping[str, Any]):
+    if isinstance(state, SorterState):
+        return state.model_copy(deep=True)
+    if isinstance(state, SorterObservation):
+        return SorterState(**state.model_dump())
+    if isinstance(state, Mapping):
+        return SorterState(**dict(state))
+    raise TypeError("state must be a SorterState, SorterObservation, or mapping.")
+
+
+def _coerce_action(action: SorterAction | Mapping[str, Any]):
+    if isinstance(action, SorterAction):
+        return action
+    if isinstance(action, Mapping):
+        return SorterAction(**dict(action))
+    raise TypeError("action must be a SorterAction or mapping.")
+
+
+def _fallback_action(task: TaskName, action: Any) -> SorterAction:
+    segment: Dict[str, Any] = {}
+    place: Dict[str, Any] = {}
+    adjust: tuple[Any, ...] = ()
+
+    if isinstance(action, Mapping):
+        action_payload = action.get(task, action)
+        if isinstance(action_payload, Mapping):
+            if task == "segment":
+                segment = dict(action_payload)
+            elif task == "place":
+                place = dict(action_payload)
+        elif task == "adjust" and isinstance(action_payload, (list, tuple)):
+            adjust = tuple(action_payload)
+
+    return SorterAction(segment=segment, place=place, adjust=adjust)
+
+
+def _step_max_reward(
+    task: TaskName, state: SorterState, action: SorterAction
+) -> float:
+    if task == "segment":
+        return TASK_MAX_SCORES["segment"]
+
+    if task == "place":
+        return TASK_MAX_SCORES["place"]
+
+    if task == "adjust":
+        total_objects = len(state.objects_present)
+        adjusted_objects = 1 if len(action.adjust) == 3 else 0
+        if total_objects <= 0 or adjusted_objects <= 0:
+            return 0.0
+        return (TASK_MAX_SCORES["adjust"] / total_objects) * (adjusted_objects)
+
+    raise ValueError(f"Unsupported task: {task}")
+
+
+def _episode_max_reward(task: TaskName, state: SorterState) -> float:
+    if task in ("segment", "place"):
+        return TASK_MAX_SCORES[task]
+
+    if task == "adjust":
+        total_objects = len(state.objects_present)
+        return TASK_MAX_SCORES["adjust"] if total_objects > 0 else 0.0
+
+    raise ValueError(f"Unsupported task: {task}")
+
+
+def _result_from_state(task: TaskName, state: SorterState, action: SorterAction):
+    rewards = list(state.reward[0])
+    feedback = list(state.reward[1])
+    raw_score = float(sum(rewards))
+    max_score = _episode_max_reward(task, state)
+    step_max_score = _step_max_reward(task, state, action)
+    normalized_score = raw_score / max_score if max_score > 0 else 0.0
+    normalized_score = max(0.0, min(1.0, normalized_score))
+    latest_reward = rewards[-1] if rewards else 0.0
+
+    return GradeResult(
+        task=task,
+        done=bool(state.done),
+        raw_score=raw_score,
+        max_score=max_score,
+        step_max_score=step_max_score,
+        normalized_score=normalized_score,
+        latest_reward=latest_reward,
+        rewards=rewards,
+        feedback=feedback,
+        final_state=state,
+    )
+
+
+def _record_failure(
+    task: TaskName, state: SorterState, action: SorterAction, message: str
+) -> GradeResult:
+    penalty = -_step_max_reward(task, state, action)
+    state.done = False
+    state.reward[0].append(penalty)
+    state.reward[1].append(message)
+    return _result_from_state(task, state, action)
+
+
+def _validate_state_for_task(task: TaskName, state: SorterState):
+    if task == "segment" and not state.objects_present:
+        raise ValueError(
+            "segment grading requires a state with objects_present populated."
+        )
+    if task == "place" and not state.objects_present:
+        raise ValueError(
+            "place grading requires a state with objects_present populated."
+        )
+    if task == "adjust" and not state.objects_present:
+        raise ValueError(
+            "adjust grading requires a state with objects_present populated."
+        )
+
+
+def grade_segment(
+    state: SorterState | SorterObservation | Mapping[str, Any],
+    action: SorterAction | Mapping[str, Any],
+):
+    graded_state = _coerce_state(state)
+    _validate_state_for_task("segment", graded_state)
+    try:
+        parsed_action = _coerce_action(action)
+        run_segment(graded_state, parsed_action.segment)
+    except (KeyError, TypeError, ValueError) as exc:
+        fallback_action = _fallback_action("segment", action)
+        return _record_failure(
+            "segment", graded_state, fallback_action, f"segment grading failed: {exc}"
+        )
+    return _result_from_state("segment", graded_state, parsed_action)
+
+
+def grade_place(
+    state: SorterState | SorterObservation | Mapping[str, Any],
+    action: SorterAction | Mapping[str, Any],
+):
+    graded_state = _coerce_state(state)
+    _validate_state_for_task("place", graded_state)
+    try:
+        parsed_action = _coerce_action(action)
+        run_place(graded_state, parsed_action.place)
+    except (KeyError, TypeError, ValueError) as exc:
+        fallback_action = _fallback_action("place", action)
+        return _record_failure(
+            "place", graded_state, fallback_action, f"place grading failed: {exc}"
+        )
+    return _result_from_state("place", graded_state, parsed_action)
+
+
+def grade_adjust(
+    state: SorterState | SorterObservation | Mapping[str, Any],
+    action: SorterAction | Mapping[str, Any],
+):
+    graded_state = _coerce_state(state)
+    _validate_state_for_task("adjust", graded_state)
+    try:
+        parsed_action = _coerce_action(action)
+        run_adjust(graded_state, parsed_action.adjust)
+    except (KeyError, TypeError, ValueError) as exc:
+        fallback_action = _fallback_action("adjust", action)
+        return _record_failure(
+            "adjust", graded_state, fallback_action, f"adjust grading failed: {exc}"
+        )
+    return _result_from_state("adjust", graded_state, parsed_action)
+
+
+def grade_task(
+    task: TaskName,
+    state: SorterState | SorterObservation | Mapping[str, Any],
+    action: SorterAction | Mapping[str, Any],
+):
+    if task == "segment":
+        return grade_segment(state, action)
+    if task == "place":
+        return grade_place(state, action)
+    if task == "adjust":
+        return grade_adjust(state, action)
+    raise ValueError(f"Unsupported task: {task}")
+
+
+def grade_payload(
+    task: TaskName,
+    state: SorterState | SorterObservation | Mapping[str, Any],
+    payload: Mapping[str, Any],
+):
+    payload_keys = set(payload.keys())
+    task_field_keys = payload_keys.intersection(TASK_FIELDS)
+
+    if task in payload:
+        if task_field_keys - {task}:
+            raise ValueError(
+                f"Payload for task '{task}' contains unrelated task fields: {sorted(task_field_keys - {task})}"
+            )
+    elif task_field_keys:
+        raise ValueError(
+            f"Payload for task '{task}' is missing its top-level key and contains other task fields: {sorted(task_field_keys)}"
+        )
+    else:
+        payload = {task: dict(payload)}
+
+    return grade_task(task, state, payload)
+
+
+__all__ = [
+    "GradeResult",
+    "SUCCESS_SCORE_THRESHOLD",
+    "TASK_MAX_SCORES",
+    "grade_adjust",
+    "grade_payload",
+    "grade_place",
+    "grade_segment",
+    "grade_task",
+]

@@ -8,8 +8,18 @@ except:
     from utils.rewards import compute_reward
 
 
-def segment(state: SorterState, objects_found: Dict[str, Tuple[int, int, int, bool]]):
+def _is_segment_done(state: SorterState) -> bool:
+    target = state.objects_present
+    found = state.positions_segment
 
+    return (
+        len(found) == len(target)
+        and set(found.keys()) == set(target.keys())
+        and all(found[obj] == target[obj] for obj in target)
+    )
+
+
+def segment(state: SorterState, objects_found: Dict[str, Tuple[int, int, int, bool]]):
     obj_loc_mapper = state.objects_present
     reward_per_object_placed = 20.0 / len(obj_loc_mapper)
 
@@ -39,3 +49,5 @@ def segment(state: SorterState, objects_found: Dict[str, Tuple[int, int, int, bo
                 -reward_per_object_placed,
                 f"The object, '{object_name}' was assigned the wrong position: '{object_found}'",
             )
+
+    state.done = _is_segment_done(state)
