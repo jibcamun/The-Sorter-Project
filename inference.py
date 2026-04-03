@@ -53,7 +53,11 @@ from pydantic import ValidationError
 from config.objects import OBJECTS
 from server.sorter_environment import SorterEnvironment
 from models import SorterObservation, SorterAction, SorterState
-from config.grid import random_grid_dims
+
+try:
+    from tasks.adjust import build_adjust_candidates
+except ImportError:
+    from .tasks.adjust import build_adjust_candidates
 
 
 load_dotenv()
@@ -63,73 +67,57 @@ API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://integrate.api.nvidia.com/v1"
 MODEL_NAME = os.getenv("MODEL_NAME") or "openai/gpt-oss-120b"
-TASK_NAME = os.getenv("THE_SORTER_PROJECT_TASK", "segment") or "segment"
+TASK_NAME = os.getenv("THE_SORTER_PROJECT_TASK", "adjust") or "adjust"
 BENCHMARK = os.getenv("THE_SORTER_PROJECT_BENCHMARK", "the_sorter_project")
 MAX_STEPS = 8
 TEMPERATURE = 0.7
 MAX_TOKENS = 150
 SUCCESS_SCORE_THRESHOLD = 0.1  # normalized score in [0, 1]
 
+TASK_ACTION_FIELDS = {
+    "segment": "segment",
+    "place": "place",
+    "adjust": "adjust",
+}
+
+TASK_OBSERVATION_FIELDS = {
+    "segment": {"positions_segment", "positions", "reward", "done"},
+    "place": {"objects_present", "positions_place", "reward", "done"},
+    "adjust": {"grid_dims", "objects_present", "positions_adjust", "reward", "done"},
+}
+
 # Max possible reward: each token contributes 0.1, across all steps
 _MAX_REWARD_PER_STEP = MAX_TOKENS * 0.1
 MAX_TOTAL_REWARD = MAX_STEPS * _MAX_REWARD_PER_STEP
 
-SYSTEM_PROMPT = (
-    textwrap.dedent(
-        """
-    You are a professional logistician, facility expert and layout engineer. You will be provided a particular task that can be:
-    a) segment: Identify objects by returning the exact object position tuples that are present in the current grid.
-    b) place: Place all the objects into an empty grid efficiently. Do not place objects in the air, and respect each object's stackability.
-    c) adjust: Adjust the position of one or many objects such that they do not overlap with other objects.
+SYSTEM_PROMPT = textwrap.dedent(
+    f"""
+    You are a professional logistician, facility expert and layout engineer.
+    Your current task is: {TASK_NAME}.
 
-    The SorterAction schema is:
-    a) segment: Dict[str, Tuple[int, int, int, bool]]
-    b) place: Dict[str, Tuple[int, int, int, bool]]
-    c) adjust: Dict[str, Tuple[str, int]]
+    Task definitions:
+    - segment: identify object names from observed object positions
+    - place: place all objects into an empty grid efficiently while respecting stackability, always return the name and position of all the objects, both the objects modified and not modified, do not return an empty dictionary
+    - adjust: adjust object positions so they do not overlap and improve placement score. Use the adjustable_objects field from the user message as context about which objects can be moved and where they currently are.
 
-    Use only the field that matches the current task. The other two fields must use their correct empty type.
-    Never use [] for object fields or {} for list fields.
+    Active action schema for this task:
+    - segment: {{"segment": {{"object_name": [x, y, z, stackable], ...}}}}
+    - place: {{"place": {{"object_name": [x, y, z, stackable], ...}}}}
+    - adjust: {{"adjust": {{"object_name": ["DIRECTION", amount], ...}}}}
 
-    Field details:
-    a) segment: Return a mapping from object name to exact position tuple in the form (x, y, z, stackable).
-    b) place: Return a mapping from object name to placement tuple (x, y, z, stackable).
-    c) adjust: Return a mapping from object name to a tuple (direction, amount). Direction must be one of RIGHT, LEFT, UP, DOWN, FORWARD, BACKWARD.
+    Return only the JSON object for the active task.
+    Do not include inactive task fields.
+    Do not include explanations, commentary, or extra keys.
+    If there is no valid move, return an empty object for the active task.
 
-    Output:
-    1. Always return a valid JSON object conforming to the schema.
-    2. Do not include any extra text, explanations, or commentary.
-    
-    Always return JSON that conforms to the SorterAction Pydantic model:
-    a) segment task: {"segment": {"object_name": [x, y, z, stackable], ...}, "place": {}, "adjust": {}}
-    b) place task: {"segment": {}, "place": {"object_name": [x, y, z, stackable], ...}, "adjust": {}}
-    c) adjust task: {"segment": {}, "place": {}, "adjust": {"object_name": ["DIRECTION", amount], ...}}
-
-    Empty value rules:
-    - segment must always be a JSON object, so when empty use {}
-    - place must always be a JSON object, so when empty use {}
-    - adjust must always be a JSON object, so when empty use {}
-    
-    Goal:
-    1. Maximize cumulative reward.
-    2. Learn from reward to improve placement in future steps.
-    
-    Do not include explanations, text, or extra fields.
-    If there is no valid move, return an empty value of the correct type for that field:
-    a) segment: {}
-    b) place: {}
-    c) adjust: {}
-    
-    The output must be parseable and valid for SorterAction(**json_output).
+    Additional context:
+    - Objects and dimensions: {OBJECTS}
     """
-    ).strip()
-    + textwrap.dedent(
-        f"Your current task is: {TASK_NAME}. These are the objects with their dimensions: {OBJECTS}. The dimensions of the grid is: {random_grid_dims()}"
-    )
-)
+).strip()
 
 
 def empty_action_json() -> str:
-    return json.dumps({"segment": {}, "place": {}, "adjust": {}})
+    return json.dumps({TASK_ACTION_FIELDS[TASK_NAME]: {}})
 
 
 def latest_reward(observation: SorterObservation) -> float:
@@ -174,13 +162,22 @@ def build_user_prompt(
 ) -> str:
     history_block = "\n".join(history[-4:]) if history else "None"
     observation_payload = last_observation.model_dump()
-    if TASK_NAME == "segment":
-        observation_payload.pop("objects_present", None)
+    allowed_fields = TASK_OBSERVATION_FIELDS[TASK_NAME]
+    observation_payload = {
+        key: value
+        for key, value in observation_payload.items()
+        if key in allowed_fields
+    }
+
+    adjustable_objects: Dict[str, List[int]] = {}
+    if TASK_NAME == "adjust":
+        adjustable_objects = build_adjust_candidates(last_observation)
 
     return textwrap.dedent(
         f"""
         Step: {step}
         Last observation: {json.dumps(observation_payload, default=_json_default)}
+        Adjustable objects: {json.dumps(adjustable_objects, default=_json_default)}
         Last reward: {last_reward:.2f}
         Last reward reason: {last_reward_feedback}
         Previous steps:
@@ -241,20 +238,15 @@ def _extract_json_payload(output_str: str) -> str:
 
 
 def _normalize_action_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
-    normalized = {
-        "segment": payload.get("segment", {}),
-        "place": payload.get("place", {}),
-        "adjust": payload.get("adjust", {}),
-    }
+    action_field = TASK_ACTION_FIELDS[TASK_NAME]
+    action_value = payload.get(action_field, payload)
 
-    if normalized["segment"] == []:
-        normalized["segment"] = {}
-    if normalized["place"] == []:
-        normalized["place"] = {}
-    if normalized["adjust"] == []:
-        normalized["adjust"] = {}
+    if action_value == [] or action_value is None:
+        action_value = {}
+    if not isinstance(action_value, dict):
+        raise ValueError(f"'{action_field}' must be a JSON object.")
 
-    return normalized
+    return {action_field: action_value}
 
 
 def parse_action(message: str) -> SorterAction:
@@ -317,7 +309,13 @@ def main():
             last_observation = obs
             last_reward = reward
 
-            log_step(step=step, action=message, reward=reward, done=done, error=error)
+            log_step(
+                step=step,
+                action=json.dumps(action.model_dump()),
+                reward=reward,
+                done=done,
+                error=error,
+            )
 
             history.append(
                 f"Step {step}: {message!r} -> reward {reward:+.2f}, feedback : {feedback}"

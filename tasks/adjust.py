@@ -1,16 +1,14 @@
 from typing import Dict, Tuple
-
 from numpy import mean, any
 
 try:
-    from ..models import SorterState
+    from ..models import SorterObservation, SorterState
     from ..config.objects import OBJECTS
     from ..utils.rewards import compute_reward
 except:
-    from models import SorterState
+    from models import SorterObservation, SorterState
     from config.objects import OBJECTS
     from utils.rewards import compute_reward
-
 
 def _remove_object(state: SorterState, obj_name: str, pos: tuple):
     dims = OBJECTS[obj_name]["dims"]
@@ -57,6 +55,17 @@ def _is_adjustable(grid: dict, obj_name: str, pos: tuple):
     return True, ""
 
 
+def build_adjust_candidates(observation: SorterObservation) -> Dict[str, list[int]]:
+    adjustable_objects: Dict[str, list[int]] = {}
+
+    for obj_name, pos in observation.objects_present.items():
+        is_adjustable, _ = _is_adjustable(observation.current_grid, obj_name, pos[:3])
+        if is_adjustable:
+            adjustable_objects[obj_name] = list(pos[:3])
+
+    return adjustable_objects
+
+
 def _adjust_position(
     state: SorterState,
     obj: str,
@@ -69,14 +78,15 @@ def _adjust_position(
     reward_per_obj = 30.0 / len(state.objects_present)
     is_adjust, msg = _is_adjustable(state.current_grid, obj, new_pos)
     if is_adjust:
+        updated_pos = (*new_pos, init_pos[3])
         _remove_object(state, obj, init_pos)
         state.current_grid[
             new_pos[0] : new_pos[0] + dimns[0],
             new_pos[1] : new_pos[1] + dimns[1],
             new_pos[2] : new_pos[2] + dimns[2],
         ] = 1
-        state.positions_adjust[obj] = new_pos
-        state.objects_present[obj] = new_pos
+        state.positions_adjust[obj] = updated_pos
+        state.objects_present[obj] = updated_pos
         compute_reward(
             state,
             mean(

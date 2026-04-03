@@ -21,7 +21,9 @@ def place(state: SorterState, placements: Dict[str, Tuple[int, int, int, bool]])
     state.weighted_grid = weighted_grid(grid_dims)
     wt_grid = state.weighted_grid
 
-    reward_per_obj = 50.0 / len(placements.keys()) if len(placements.keys()) > 0 else 0.0
+    reward_per_obj = (
+        50.0 / len(placements.keys()) if len(placements.keys()) > 0 else 0.0
+    )
 
     if set(placements.keys()) != set(state.objects_present.keys()):
         compute_reward(
@@ -83,16 +85,13 @@ def place(state: SorterState, placements: Dict[str, Tuple[int, int, int, bool]])
                         f"place: Object '{obj}' placed successfully",
                     )
                     state.positions_place[obj] = pos
-            elif (
-                stack
-                and all(
-                    grid[
-                        pos[0] : pos[0] + dimns[0],
-                        pos[1] : pos[1] + dimns[1],
-                        pos[2] - 1,
-                    ]
-                    == 1
-                )
+            elif stack and all(
+                grid[
+                    pos[0] : pos[0] + dimns[0],
+                    pos[1] : pos[1] + dimns[1],
+                    pos[2] - 1,
+                ]
+                == 1
             ):
                 grid[
                     pos[0] : pos[0] + dimns[0],
