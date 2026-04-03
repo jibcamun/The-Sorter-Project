@@ -6,12 +6,10 @@ try:
     from ..models import SorterState
     from ..config.objects import OBJECTS
     from ..utils.rewards import compute_reward
-    from ..utils.grids import weighted_grid
 except:
     from models import SorterState
     from config.objects import OBJECTS
     from utils.rewards import compute_reward
-    from utils.grids import weighted_grid
 
 
 def _placement_score(weighted_grid, obj_name: str, pos: tuple) -> float:
