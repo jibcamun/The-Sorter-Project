@@ -1,36 +1,41 @@
+from typing import Dict, Tuple
+
 try:
-    from ..models import SorterState, SorterAction
+    from ..models import SorterState
     from ..utils.rewards import compute_reward
 except:
-    from models import SorterState, SorterAction
+    from models import SorterState
     from utils.rewards import compute_reward
 
 
-def segment(state: SorterState, action: SorterAction):
+def segment(state: SorterState, objects_found: Dict[str, Tuple[int, int, int, bool]]):
 
     obj_loc_mapper = state.objects_present
     reward_per_object_placed = 20.0 / len(obj_loc_mapper)
-    objects_found = action.segment
 
     remaining_objects = dict(obj_loc_mapper)
 
-    for object_found in objects_found:
-        matched_name = None
-        for object_present, object_position in remaining_objects.items():
-            if object_found == object_position:
-                matched_name = object_present
-                break
+    for object_name, object_found in objects_found.items():
+        expected_position = remaining_objects.get(object_name)
 
-        if matched_name is not None:
+        if expected_position is None:
+            compute_reward(
+                state,
+                -reward_per_object_placed,
+                f"The object name, '{object_name}' is not present in the grid",
+            )
+            continue
+
+        if object_found == expected_position:
             compute_reward(
                 state,
                 reward_per_object_placed,
-                f"the right object, '{matched_name}' was found at correct position",
+                f"the right object, '{object_name}' was found at correct position",
             )
-            state.positions_segment[matched_name] = remaining_objects.pop(matched_name)
+            state.positions_segment[object_name] = remaining_objects.pop(object_name)
         else:
             compute_reward(
                 state,
                 -reward_per_object_placed,
-                f"The position, '{object_found}' does not correspond to any object in the grid",
+                f"The object, '{object_name}' was assigned the wrong position: '{object_found}'",
             )

@@ -26,6 +26,7 @@ class SorterEnvironment(Environment):
             grid_dims=state.grid_dims,
             weighted_grid=state.weighted_grid,
             current_grid=state.current_grid,
+            objects_present=state.objects_present,
             reward=state.reward,
             done=state.done,
             positions_place=state.positions_place,

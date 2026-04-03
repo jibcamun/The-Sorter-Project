@@ -1,27 +1,29 @@
+from typing import Dict, Tuple
+
 from numpy import zeros, mean, all
 
 try:
-    from ..models import SorterState, SorterAction
+    from ..models import SorterState
     from ..config.objects import OBJECTS
     from ..utils.rewards import compute_reward
     from ..utils.grids import weighted_grid
 except:
-    from models import SorterState, SorterAction
+    from models import SorterState
     from config.objects import OBJECTS
     from utils.rewards import compute_reward
     from utils.grids import weighted_grid
 
 
-def place(state: SorterState, action: SorterAction):
+def place(state: SorterState, placements: Dict[str, Tuple[int, int, int, bool]]):
     grid_dims = state.grid_dims
 
     grid = zeros(grid_dims)
     state.weighted_grid = weighted_grid(grid_dims)
     wt_grid = state.weighted_grid
 
-    reward_per_obj = 50.0 / len(action.place.keys())
+    reward_per_obj = 50.0 / len(placements.keys()) if len(placements.keys()) > 0 else 0.0
 
-    if set(action.place.keys()) != set(state.objects_present.keys()):
+    if set(placements.keys()) != set(state.objects_present.keys()):
         compute_reward(
             state,
             -reward_per_obj,
@@ -31,7 +33,7 @@ def place(state: SorterState, action: SorterAction):
 
     objs_alrdy_present = state.positions_place
 
-    for obj, pos in action.place.items():
+    for obj, pos in placements.items():
         dimns = OBJECTS[obj]["dims"]
         stack = OBJECTS[obj]["stack"]
 

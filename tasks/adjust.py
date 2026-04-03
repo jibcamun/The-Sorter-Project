@@ -1,11 +1,13 @@
+from typing import Dict, Tuple
+
 from numpy import mean, any
 
 try:
-    from ..models import SorterState, SorterAction
+    from ..models import SorterState
     from ..config.objects import OBJECTS
     from ..utils.rewards import compute_reward
 except:
-    from models import SorterState, SorterAction
+    from models import SorterState
     from config.objects import OBJECTS
     from utils.rewards import compute_reward
 
@@ -95,9 +97,9 @@ def _adjust_position(
         )
 
 
-def adjust(state: SorterState, action: SorterAction):
+def adjust(state: SorterState, adjustments: Dict[str, Tuple[str, int]]):
     reward_per_obj = 30.0 / len(state.objects_present)
-    for obj, obj_adjust_info in action.adjust.items():
+    for obj, obj_adjust_info in adjustments.items():
         init_pos = state.objects_present[obj]
         direction = obj_adjust_info[0]
         mag = obj_adjust_info[1]
