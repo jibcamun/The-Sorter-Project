@@ -9,13 +9,16 @@ except:
     from config.grid import random_grid_dims
 
 
-def init_grid():
+def init_grid(object_names=None):
     x, y, z = random_grid_dims()
 
     grid = np.zeros((x, y, z))
 
-    n_objs = random.randint(3, len(OBJECT_NAMES) + 1)
-    chosen_objs = random.choice(OBJECT_NAMES, size=n_objs, replace=False)
+    if object_names is None:
+        n_objs = random.randint(3, len(OBJECT_NAMES) + 1)
+        chosen_objs = random.choice(OBJECT_NAMES, size=n_objs, replace=False)
+    else:
+        chosen_objs = list(object_names)
 
     placed_objs = {}
 

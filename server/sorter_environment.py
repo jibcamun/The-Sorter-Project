@@ -5,12 +5,14 @@ from openenv.core.env_server.types import State
 
 try:
     from ..models import SorterAction, SorterObservation, SorterState
+    from ..config.objects import OBJECTS
     from ..utils.grids import init_grid, weighted_grid
     from ..tasks.segment import segment
     from ..tasks.adjust import adjust
     from ..tasks.place import place
 except ImportError:
     from models import SorterAction, SorterObservation, SorterState
+    from config.objects import OBJECTS
     from utils.grids import init_grid, weighted_grid
     from tasks.segment import segment
     from tasks.adjust import adjust
@@ -19,6 +21,23 @@ except ImportError:
 
 class SorterEnvironment(Environment):
     SUPPORTS_CONCURRENT_SESSIONS: bool = True
+
+    def _segment_observed_objects(self, state: SorterState):
+        observed_objects = []
+        for obj_name, pos in sorted(
+            state.objects_present.items(), key=lambda item: item[1][:3]
+        ):
+            dims = list(OBJECTS[obj_name]["dims"])
+            stackable = bool(OBJECTS[obj_name]["stack"])
+            observed_objects.append(
+                {
+                    "position": list(pos),
+                    "dims": dims,
+                    "stackable": stackable,
+                    "volume": int(dims[0] * dims[1] * dims[2]),
+                }
+            )
+        return observed_objects
 
     def _initial_state_kwargs(self, grid_dims, fresh_grid, objs_present):
         state_kwargs = {
@@ -36,6 +55,8 @@ class SorterEnvironment(Environment):
             state_kwargs.update(
                 positions_segment={},
                 positions=[],
+                observed_objects=[],
+                last_segment_attempt={},
             )
         elif self.task == "place":
             state_kwargs.update(
@@ -63,6 +84,8 @@ class SorterEnvironment(Environment):
             state_kwargs.update(
                 positions_segment=state.positions_segment,
                 positions=list(state.objects_present.values()),
+                observed_objects=self._segment_observed_objects(state),
+                last_segment_attempt=state.last_segment_attempt,
             )
         elif self.task == "place":
             state_kwargs.update(
@@ -84,7 +107,6 @@ class SorterEnvironment(Environment):
         return SorterObservation(**observation_kwargs)
 
     def __init__(self, task):
-
         fresh_grid, objs_present = init_grid()
         grid_dims = tuple(int(dim) for dim in fresh_grid.shape)
         self.task = task
@@ -95,7 +117,6 @@ class SorterEnvironment(Environment):
         self._reset_count = 0
 
     def reset(self) -> SorterObservation:
-
         fresh_grid, objs_present = init_grid()
         grid_dims = tuple(int(dim) for dim in fresh_grid.shape)
 

@@ -117,17 +117,13 @@ def _is_legal_adjustment(state: SorterState, obj_name: str, new_pos: tuple) -> b
 
 
 def _position_score(state: SorterState, obj_name: str, pos: tuple) -> float:
-    reward_per_obj = 30.0 / len(state.objects_present)
     dims = tuple(OBJECTS[obj_name]["dims"])
-    return (
-        mean(
-            state.weighted_grid[
-                pos[0] : pos[0] + dims[0],
-                pos[1] : pos[1] + dims[1],
-                pos[2] : pos[2] + dims[2],
-            ]
-        )
-        * reward_per_obj
+    return mean(
+        state.weighted_grid[
+            pos[0] : pos[0] + dims[0],
+            pos[1] : pos[1] + dims[1],
+            pos[2] : pos[2] + dims[2],
+        ]
     )
 
 
@@ -153,6 +149,22 @@ def _best_adjustment_position(state: SorterState, obj_name: str) -> tuple | None
     return best_pos
 
 
+def _target_position(init_pos: tuple, direction: str, amount: int) -> tuple | None:
+    if direction == "RIGHT":
+        return (init_pos[0] + amount, init_pos[1], init_pos[2])
+    if direction == "LEFT":
+        return (init_pos[0] - amount, init_pos[1], init_pos[2])
+    if direction == "FORWARD":
+        return (init_pos[0], init_pos[1] + amount, init_pos[2])
+    if direction == "BACKWARD":
+        return (init_pos[0], init_pos[1] - amount, init_pos[2])
+    if direction == "UP":
+        return (init_pos[0], init_pos[1], init_pos[2] + amount)
+    if direction == "DOWN":
+        return (init_pos[0], init_pos[1], init_pos[2] - amount)
+    return None
+
+
 def _adjustment_reward(
     current_score: float, new_score: float, best_score: float, reward_per_obj: float
 ) -> float:
@@ -170,13 +182,27 @@ def _adjustment_reward(
     return max(-reward_per_obj, min(reward, reward_per_obj))
 
 
-def _is_adjust_done(
-    state: SorterState, object_to_check: Tuple[str, str, int] | Tuple[()]
+def _is_best_legal_position(
+    state: SorterState, obj_name: str, best_pos_before_move: tuple | None
 ) -> bool:
-    if not object_to_check:
-        return False
-    obj_name = object_to_check[0]
-    return _best_adjustment_position(state, obj_name) is None
+    if best_pos_before_move is None:
+        return True
+    return state.objects_present[obj_name][:3] == best_pos_before_move
+
+
+def _adjustment_feedback(
+    obj_name: str, current_score: float, new_score: float, best_score: float
+) -> str:
+    if new_score < current_score:
+        return f"adjust: Object '{obj_name}' moved legally but to a worse position."
+    if new_score == current_score:
+        return f"adjust: Object '{obj_name}' moved legally but did not improve its score."
+    if new_score >= best_score:
+        return f"adjust: Object '{obj_name}' adjusted successfully to its best legal position."
+    return (
+        f"adjust: Object '{obj_name}' adjusted successfully to the requested legal position,"
+        " but a better legal position still exists."
+    )
 
 
 def adjust(state: SorterState, adjustment: Tuple[str, str, int] | Tuple[()]):
@@ -190,12 +216,19 @@ def adjust(state: SorterState, adjustment: Tuple[str, str, int] | Tuple[()]):
         )
         return
 
-    obj, _direction, _amount = adjustment
+    obj, direction, amount = adjustment
     if obj not in state.objects_present:
         compute_reward(
             state,
             -reward_per_obj,
             f"adjust: Object '{obj}' is not present in the grid.",
+        )
+        return
+    if amount < 0:
+        compute_reward(
+            state,
+            -reward_per_obj,
+            "adjust: Movement amount must be non-negative.",
         )
         return
 
@@ -209,8 +242,23 @@ def adjust(state: SorterState, adjustment: Tuple[str, str, int] | Tuple[()]):
         )
         return
 
-    best_pos = _best_adjustment_position(state, obj)
-    if best_pos is None:
+    requested_pos = _target_position(init_pos[:3], direction, amount)
+    if requested_pos is None:
+        compute_reward(
+            state,
+            -reward_per_obj,
+            'adjust: Invalid choice of adjust, valid choices are: "RIGHT", "LEFT", "FORWARD", "BACKWARD", "UP" and "DOWN"',
+        )
+        return
+    current_score = _position_score(state, obj, init_pos[:3])
+    best_pos_before_move = _best_adjustment_position(state, obj)
+    best_score = (
+        _position_score(state, obj, best_pos_before_move)
+        if best_pos_before_move is not None
+        else current_score
+    )
+
+    if best_pos_before_move is None:
         compute_reward(
             state,
             0.0,
@@ -219,26 +267,28 @@ def adjust(state: SorterState, adjustment: Tuple[str, str, int] | Tuple[()]):
         state.done = True
         return
 
-    current_score = _position_score(state, obj, init_pos[:3])
-    best_score = _position_score(state, obj, best_pos)
+    if not _is_legal_adjustment(state, obj, requested_pos):
+        compute_reward(
+            state,
+            -reward_per_obj,
+            f"adjust: Object '{obj}' could not be adjusted to the requested position.",
+        )
+        return
+
     dimns = OBJECTS[obj]["dims"]
-    updated_pos = (*best_pos, init_pos[3])
+    updated_pos = (*requested_pos, init_pos[3])
     _remove_object(state, obj, init_pos)
     state.current_grid[
-        best_pos[0] : best_pos[0] + dimns[0],
-        best_pos[1] : best_pos[1] + dimns[1],
-        best_pos[2] : best_pos[2] + dimns[2],
+        requested_pos[0] : requested_pos[0] + dimns[0],
+        requested_pos[1] : requested_pos[1] + dimns[1],
+        requested_pos[2] : requested_pos[2] + dimns[2],
     ] = 1
     state.positions_adjust[obj] = updated_pos
     state.objects_present[obj] = updated_pos
-    new_score = _position_score(state, obj, best_pos)
+    new_score = _position_score(state, obj, requested_pos)
     compute_reward(
         state,
         _adjustment_reward(current_score, new_score, best_score, reward_per_obj),
-        (
-            f"adjust: Object '{obj}' adjusted successfully to a legal position."
-            if new_score < best_score
-            else f"adjust: Object '{obj}' adjusted successfully to its best legal position."
-        ),
+        _adjustment_feedback(obj, current_score, new_score, best_score),
     )
-    state.done = _is_adjust_done(state, adjustment)
+    state.done = _is_best_legal_position(state, obj, best_pos_before_move)

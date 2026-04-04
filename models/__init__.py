@@ -29,6 +29,7 @@ class SorterObservation(
     current_grid: NDArray
     objects_present: Dict[str, PositionTuple] = Field(default_factory=dict)
     reward: Tuple[List[float], List[str]] = Field(default_factory=lambda: ([], []))
+    advisory: List[str] = Field(default_factory=list)
     done: bool = Field(default=False)
 
 
@@ -43,4 +44,5 @@ class SorterState(
     current_grid: NDArray
     objects_present: Dict[str, PositionTuple] = Field(default_factory=dict)
     reward: Tuple[List[float], List[str]] = Field(default_factory=lambda: ([], []))
+    advisory: List[str] = Field(default_factory=list)
     done: bool = Field(default=False)

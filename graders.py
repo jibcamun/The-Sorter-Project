@@ -50,6 +50,23 @@ class GradeResult:
         return payload
 
 
+@dataclass(slots=True)
+class ParsedAction:
+    segment: Dict[str, Any]
+    place: Dict[str, Any]
+    adjust: tuple[Any, ...]
+
+
+def _normalize_position_payload_map(payload: Mapping[str, Any]) -> Dict[str, Any]:
+    normalized: Dict[str, Any] = {}
+    for object_name, position in payload.items():
+        if isinstance(position, (list, tuple)):
+            normalized[object_name] = tuple(position)
+        else:
+            normalized[object_name] = position
+    return normalized
+
+
 def _coerce_state(state: SorterState | SorterObservation | Mapping[str, Any]):
     if isinstance(state, SorterState):
         return state.model_copy(deep=True)
@@ -62,13 +79,33 @@ def _coerce_state(state: SorterState | SorterObservation | Mapping[str, Any]):
 
 def _coerce_action(action: SorterAction | Mapping[str, Any]):
     if isinstance(action, SorterAction):
-        return action
+        return ParsedAction(
+            segment=_normalize_position_payload_map(action.segment),
+            place=_normalize_position_payload_map(action.place),
+            adjust=tuple(action.adjust),
+        )
     if isinstance(action, Mapping):
-        return SorterAction(**dict(action))
+        action_dict = dict(action)
+        segment = action_dict.get("segment", {})
+        place = action_dict.get("place", {})
+        adjust = action_dict.get("adjust", ())
+
+        if not isinstance(segment, Mapping):
+            raise TypeError("segment action must be a mapping.")
+        if not isinstance(place, Mapping):
+            raise TypeError("place action must be a mapping.")
+        if not isinstance(adjust, (list, tuple)):
+            raise TypeError("adjust action must be a list or tuple.")
+
+        return ParsedAction(
+            segment=_normalize_position_payload_map(segment),
+            place=_normalize_position_payload_map(place),
+            adjust=tuple(adjust),
+        )
     raise TypeError("action must be a SorterAction or mapping.")
 
 
-def _fallback_action(task: TaskName, action: Any) -> SorterAction:
+def _fallback_action(task: TaskName, action: Any) -> ParsedAction:
     segment: Dict[str, Any] = {}
     place: Dict[str, Any] = {}
     adjust: tuple[Any, ...] = ()
@@ -77,17 +114,17 @@ def _fallback_action(task: TaskName, action: Any) -> SorterAction:
         action_payload = action.get(task, action)
         if isinstance(action_payload, Mapping):
             if task == "segment":
-                segment = dict(action_payload)
+                segment = _normalize_position_payload_map(action_payload)
             elif task == "place":
-                place = dict(action_payload)
+                place = _normalize_position_payload_map(action_payload)
         elif task == "adjust" and isinstance(action_payload, (list, tuple)):
             adjust = tuple(action_payload)
 
-    return SorterAction(segment=segment, place=place, adjust=adjust)
+    return ParsedAction(segment=segment, place=place, adjust=adjust)
 
 
 def _step_max_reward(
-    task: TaskName, state: SorterState, action: SorterAction
+    task: TaskName, state: SorterState, action: ParsedAction
 ) -> float:
     if task == "segment":
         return TASK_MAX_SCORES["segment"]
@@ -116,7 +153,7 @@ def _episode_max_reward(task: TaskName, state: SorterState) -> float:
     raise ValueError(f"Unsupported task: {task}")
 
 
-def _result_from_state(task: TaskName, state: SorterState, action: SorterAction):
+def _result_from_state(task: TaskName, state: SorterState, action: ParsedAction):
     rewards = list(state.reward[0])
     feedback = list(state.reward[1])
     raw_score = float(sum(rewards))
@@ -141,7 +178,7 @@ def _result_from_state(task: TaskName, state: SorterState, action: SorterAction)
 
 
 def _record_failure(
-    task: TaskName, state: SorterState, action: SorterAction, message: str
+    task: TaskName, state: SorterState, action: ParsedAction, message: str
 ) -> GradeResult:
     penalty = -_step_max_reward(task, state, action)
     state.done = False
@@ -201,12 +238,13 @@ def grade_place(
 
 def grade_adjust(
     state: SorterState | SorterObservation | Mapping[str, Any],
-    action: SorterAction | Mapping[str, Any],
+    action: SorterAction | Mapping[str, Any] | list[Any] | tuple[Any, ...],
 ):
     graded_state = _coerce_state(state)
     _validate_state_for_task("adjust", graded_state)
     try:
-        parsed_action = _coerce_action(action)
+        action_input = {"adjust": action} if isinstance(action, (list, tuple)) else action
+        parsed_action = _coerce_action(action_input)
         run_adjust(graded_state, parsed_action.adjust)
     except (KeyError, TypeError, ValueError) as exc:
         fallback_action = _fallback_action("adjust", action)
@@ -219,7 +257,7 @@ def grade_adjust(
 def grade_task(
     task: TaskName,
     state: SorterState | SorterObservation | Mapping[str, Any],
-    action: SorterAction | Mapping[str, Any],
+    action: SorterAction | Mapping[str, Any] | list[Any] | tuple[Any, ...],
 ):
     if task == "segment":
         return grade_segment(state, action)
@@ -233,8 +271,15 @@ def grade_task(
 def grade_payload(
     task: TaskName,
     state: SorterState | SorterObservation | Mapping[str, Any],
-    payload: Mapping[str, Any],
+    payload: Any,
 ):
+    if not isinstance(payload, Mapping):
+        if task != "adjust":
+            raise ValueError(
+                f"Payload for task '{task}' must be a mapping with top-level key '{task}'."
+            )
+        payload = {task: payload}
+
     payload_keys = set(payload.keys())
     task_field_keys = payload_keys.intersection(TASK_FIELDS)
 
@@ -248,7 +293,7 @@ def grade_payload(
             f"Payload for task '{task}' is missing its top-level key and contains other task fields: {sorted(task_field_keys)}"
         )
     else:
-        payload = {task: dict(payload)}
+        payload = {task: payload}
 
     return grade_task(task, state, payload)
 

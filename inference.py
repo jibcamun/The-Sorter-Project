@@ -1,46 +1,3 @@
-"""
-Inference Script Example
-===================================
-MANDATORY
-- Before submitting, ensure the following variables are defined in your environment configuration:
-    API_BASE_URL   The API endpoint for the LLM.
-    MODEL_NAME     The model identifier to use for inference.
-    HF_TOKEN       Your Hugging Face / API key.
-    LOCAL_IMAGE_NAME The name of the local image to use for the environment if you are using from_docker_image()
-                     method
-
-- Defaults are set only for API_BASE_URL and MODEL_NAME
-    (and should reflect your active inference setup):
-    API_BASE_URL = os.getenv("API_BASE_URL", "<your-active-endpoint>")
-    MODEL_NAME = os.getenv("MODEL_NAME", "<your-active-model>")
-
-- The inference script must be named `inference.py` and placed in the root directory of the project
-- Participants must use OpenAI Client for all LLM calls using above variables
-
-STDOUT FORMAT
-- The script must emit exactly three line types to stdout, in this order:
-
-    [START] task=<task_name> env=<benchmark> model=<model_name>
-    [STEP]  step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
-    [END]   success=<true|false> steps=<n> rewards=<r1,r2,...,rn>
-
-  Rules:
-    - One [START] line at episode begin.
-    - One [STEP] line per step, immediately after the graded step returns.
-    - One [END] line after env.close(), always emitted (even on exception).
-    - reward and rewards are formatted to 2 decimal places.
-    - done and success are lowercase booleans: true or false.
-    - error is the raw last_action_error string, or null if none.
-    - All fields on a single line with no newlines within a line.
-
-  Example:
-    [START] task=click-test env=miniwob model=Qwen3-VL-30B
-    [STEP] step=1 action=click('123') reward=0.00 done=false error=null
-    [STEP] step=2 action=fill('456','text') reward=0.00 done=false error=null
-    [STEP] step=3 action=click('789') reward=1.00 done=true error=null
-    [END] success=true steps=3 rewards=0.00,0.00,1.00
-"""
-
 import os
 import textwrap
 from dotenv import load_dotenv
@@ -52,7 +9,7 @@ from openai import OpenAI
 from pydantic import ValidationError
 from config.objects import OBJECTS
 from server.sorter_environment import SorterEnvironment
-from models import SorterObservation, SorterAction, SorterState
+from models import SorterObservation, SorterState
 
 try:
     from graders import GradeResult, grade_task
@@ -71,7 +28,7 @@ API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://integrate.api.nvidia.com/v1"
 MODEL_NAME = os.getenv("MODEL_NAME") or "openai/gpt-oss-120b"
-TASK_NAME = os.getenv("THE_SORTER_PROJECT_TASK", "place") or "place"
+TASK_NAME = os.getenv("THE_SORTER_PROJECT_TASK", "adjust") or "adjust"
 BENCHMARK = os.getenv("THE_SORTER_PROJECT_BENCHMARK", "the_sorter_project")
 MAX_STEPS = 8
 TEMPERATURE = 0.7
@@ -83,9 +40,24 @@ TASK_ACTION_FIELDS = {
 }
 
 TASK_OBSERVATION_FIELDS = {
-    "segment": {"positions_segment", "positions", "reward", "done"},
-    "place": {"objects_present", "positions_place", "reward", "done"},
-    "adjust": {"grid_dims", "objects_present", "positions_adjust", "reward", "done"},
+    "segment": {
+        "positions_segment",
+        "positions",
+        "observed_objects",
+        "last_segment_attempt",
+        "reward",
+        "advisory",
+        "done",
+    },
+    "place": {"objects_present", "positions_place", "reward", "advisory", "done"},
+    "adjust": {
+        "grid_dims",
+        "objects_present",
+        "positions_adjust",
+        "reward",
+        "advisory",
+        "done",
+    },
 }
 
 SYSTEM_PROMPT = textwrap.dedent(
@@ -94,14 +66,14 @@ SYSTEM_PROMPT = textwrap.dedent(
     Your current task is: {TASK_NAME}.
 
     Task definitions:
-    - segment: identify object names from observed object positions
-    - place: place all objects into an empty grid efficiently while respecting stackability, always return the name and position of all the objects, both the objects modified and not modified, do not return an empty dictionary
-    - adjust: return a single tuple of the form ["object_name", "DIRECTION", amount]. The environment will still apply the current adjustment logic for the selected object.
+    a) segment: identify object names for the observed objects using only observable information. Each observed object includes its position, dimensions, stackability, and volume. Objects with identical observable signatures may be interchangeable for scoring, so focus on assigning labels consistently within each compatible group. Return exactly one flat mapping from object name to position under the segment key. Do not nest place or adjust inside segment.
+    b) place: place all objects into an empty grid efficiently while respecting stackability, always return the name and position of all the objects, both the objects modified and not modified, do not return an empty dictionary
+    c) adjust: return a single tuple of the form ["object_name", "DIRECTION", amount]. The requested direction and amount are the actual move that will be applied if legal. Rewards compare that requested move against the best legal position for the same object, so keep improving one object until it reaches its best legal position.
 
     Active action schema for this task:
-    - segment: {{"segment": {{"object_name": [x, y, z, stackable], ...}}}}
-    - place: {{"place": {{"object_name": [x, y, z, stackable], ...}}}}
-    - adjust: {{"adjust": ["object_name", "DIRECTION", amount]}}
+    a) segment: {{"segment": {{"object_name": [x, y, z, stackable], ...}}}}
+    b) place: {{"place": {{"object_name": [x, y, z, stackable], ...}}}}
+    c) adjust: {{"adjust": ["object_name", "DIRECTION", amount]}}
 
     Return only the JSON object for the active task.
     Do not include inactive task fields.
@@ -110,7 +82,7 @@ SYSTEM_PROMPT = textwrap.dedent(
     For adjust, return exactly one tuple when valid_adjustments is not empty.
 
     Additional context:
-    - Objects and dimensions: {OBJECTS}
+    Objects and dimensions: {OBJECTS}
     """
 ).strip()
 
@@ -120,14 +92,25 @@ def empty_action_json() -> str:
     return json.dumps({TASK_ACTION_FIELDS[TASK_NAME]: empty_value})
 
 
-def latest_reward(observation: SorterObservation) -> float:
-    reward_values = observation.reward[0] if observation.reward else []
-    return reward_values[-1] if reward_values else 0.0
+def _empty_action_payload_dict() -> Dict[str, Any]:
+    return {
+        "segment": {},
+        "place": {},
+        "adjust": (),
+    }
 
 
-def latest_feedback(observation: SorterObservation) -> str:
-    feedback_values = observation.reward[1] if observation.reward else []
-    return feedback_values[-1] if feedback_values else "No feedback available."
+def current_reward_events(observation: SorterObservation) -> List[float]:
+    return list(observation.reward[0]) if observation.reward else []
+
+
+def current_feedback_events(observation: SorterObservation) -> List[str]:
+    return list(observation.reward[1]) if observation.reward else []
+
+
+def latest_advisory(observation: SorterObservation) -> str:
+    advisory_values = observation.advisory if observation.advisory else []
+    return advisory_values[-1] if advisory_values else "No advisory available."
 
 
 def log_start(task: str, env: str, model: str) -> None:
@@ -156,8 +139,10 @@ def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> No
 def build_user_prompt(
     step: int,
     last_observation: SorterObservation,
-    last_reward: float,
-    last_reward_feedback: str,
+    last_reward_total: float,
+    last_reward_events: List[float],
+    last_reward_feedback_events: List[str],
+    last_advisory: str,
     history: List[str],
 ) -> str:
     history_block = "\n".join(history[-4:]) if history else "None"
@@ -169,17 +154,35 @@ def build_user_prompt(
         if key in allowed_fields
     }
 
-    valid_adjustments: Dict[str, List[Dict[str, Any]]] = {}
+    valid_adjustments: Dict[str, List[int]] = {}
     if TASK_NAME == "adjust":
         valid_adjustments = build_adjust_candidates(last_observation)
+
+    advisory_line = (
+        f"Advisory: {last_advisory}"
+        if last_advisory != "No advisory available."
+        else "Advisory: None"
+    )
+    segment_guidance = ""
+    if TASK_NAME == "segment":
+        segment_guidance = (
+            "Segment guidance: assign one object label to each observed position using only observed_objects[].dims, stackable, and volume. "
+            "Do not rely on hidden candidate label lists; infer from the object catalog and the observation only. "
+            "Return a flat mapping like "
+            '{"segment":{"book":[x,y,z,true],"bottle":[x,y,z,false]}}. '
+            "Do not put a place key inside segment."
+        )
 
     return textwrap.dedent(
         f"""
         Step: {step}
         Last observation: {json.dumps(observation_payload, default=_json_default)}
-        Valid adjustments: {json.dumps(valid_adjustments, default=_json_default)}
-        Last reward: {last_reward:.2f}
-        Last reward reason: {last_reward_feedback}
+        Adjustable objects: {json.dumps(valid_adjustments, default=_json_default)}
+        Last step reward total: {last_reward_total:.2f}
+        Last step reward events: {json.dumps(last_reward_events, default=_json_default)}
+        Last step feedback: {json.dumps(last_reward_feedback_events, default=_json_default)}
+        {advisory_line}
+        {segment_guidance}
         Previous steps:
         {history_block}
         Run the next step.
@@ -197,12 +200,20 @@ def get_model_message(
     client: OpenAI,
     step: int,
     last_observation: SorterObservation,
-    last_reward: float,
-    last_reward_feedback: str,
+    last_reward_total: float,
+    last_reward_events: List[float],
+    last_reward_feedback_events: List[str],
+    last_advisory: str,
     history: List[str],
 ) -> str:
     user_prompt = build_user_prompt(
-        step, last_observation, last_reward, last_reward_feedback, history
+        step,
+        last_observation,
+        last_reward_total,
+        last_reward_events,
+        last_reward_feedback_events,
+        last_advisory,
+        history,
     )
     try:
         completion = client.chat.completions.create(
@@ -240,27 +251,45 @@ def _extract_json_payload(output_str: str) -> str:
 def _normalize_action_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     action_field = TASK_ACTION_FIELDS[TASK_NAME]
     action_value = payload.get(action_field, payload)
+    normalized_payload = _empty_action_payload_dict()
 
     if TASK_NAME == "adjust":
         if action_value is None:
             action_value = []
+        if isinstance(action_value, dict):
+            if not action_value:
+                action_value = []
+            elif len(action_value) == 1:
+                obj_name, move = next(iter(action_value.items()))
+                if isinstance(move, (list, tuple)) and len(move) == 2:
+                    action_value = [obj_name, move[0], move[1]]
+                else:
+                    raise ValueError(
+                        "'adjust' dict form must be {'obj_name': ['DIRECTION', amount]}."
+                    )
+            else:
+                raise ValueError(
+                    "'adjust' dict form must contain exactly one object entry."
+                )
         if not isinstance(action_value, (list, tuple)):
             raise ValueError(f"'{action_field}' must be a JSON array.")
-        return {action_field: action_value}
+        normalized_payload[action_field] = tuple(action_value)
+        return normalized_payload
 
     if action_value == [] or action_value is None:
         action_value = {}
     if not isinstance(action_value, dict):
         raise ValueError(f"'{action_field}' must be a JSON object.")
 
-    return {action_field: action_value}
+    normalized_payload[action_field] = action_value
+    return normalized_payload
 
 
-def parse_action(message: str) -> SorterAction:
+def parse_action(message: str) -> Dict[str, Any]:
     payload = json.loads(_extract_json_payload(message))
     if not isinstance(payload, dict):
         raise ValueError("Model output JSON must be an object at the top level.")
-    return SorterAction(**_normalize_action_payload(payload))
+    return _normalize_action_payload(payload)
 
 
 def _get_internal_state(env: SorterEnvironment) -> SorterState:
@@ -299,7 +328,7 @@ def _summarize_step_feedback(step_feedback: List[str]) -> str:
 
 
 def apply_graded_step(
-    env: SorterEnvironment, task_name: str, action: SorterAction
+    env: SorterEnvironment, task_name: str, action: Dict[str, Any]
 ) -> tuple[SorterObservation, GradeResult]:
     env.step_count += 1
     internal_state = _get_internal_state(env)
@@ -327,8 +356,10 @@ def main():
     try:
         result = env.reset()
         last_observation = result
-        last_reward = latest_reward(last_observation)
-        last_reward_feedback = latest_feedback(last_observation)
+        last_reward_events = current_reward_events(last_observation)
+        last_reward_feedback_events = current_feedback_events(last_observation)
+        last_reward_total = sum(last_reward_events) if last_reward_events else 0.0
+        last_advisory = latest_advisory(last_observation)
 
         for step in range(1, MAX_STEPS + 1):
             if result.done:
@@ -338,8 +369,10 @@ def main():
                 client,
                 step,
                 last_observation,
-                last_reward,
-                last_reward_feedback,
+                last_reward_total,
+                last_reward_events,
+                last_reward_feedback_events,
+                last_advisory,
                 history,
             )
 
@@ -349,7 +382,7 @@ def main():
             except (JSONDecodeError, ValidationError, ValueError, TypeError) as exc:
                 print(f"[DEBUG] Action parse failed: {exc}", flush=True)
                 parse_error = str(exc)
-                action = SorterAction(**json.loads(empty_action_json()))
+                action = json.loads(empty_action_json())
 
             previous_rewards = list(_get_internal_state(env).reward[0])
             previous_feedback = list(_get_internal_state(env).reward[1])
@@ -371,19 +404,21 @@ def main():
             rewards.append(reward)
             steps_taken = step
             last_observation = obs
-            last_reward = reward
-            last_reward_feedback = feedback
+            last_reward_total = reward
+            last_reward_events = step_rewards
+            last_reward_feedback_events = step_feedback
+            last_advisory = latest_advisory(obs)
 
             log_step(
                 step=step,
-                action=json.dumps(action.model_dump()),
+                action=json.dumps(action),
                 reward=reward,
                 done=done,
                 error=error,
             )
 
             history.append(
-                f"Step {step}: {message!r} -> reward {reward:+.2f}, feedback : {feedback}"
+                f"Step {step}: {message!r} -> reward_total {reward:+.2f}, reward_events : {step_rewards}, feedback : {step_feedback}, advisory : {last_advisory}"
             )
 
             if done:
