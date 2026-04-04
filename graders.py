@@ -67,6 +67,10 @@ def _normalize_position_payload_map(payload: Mapping[str, Any]) -> Dict[str, Any
     return normalized
 
 
+def _normalize_adjust_payload(payload: Any) -> tuple[Any, ...]:
+    return tuple(payload) if isinstance(payload, (list, tuple)) else ()
+
+
 def _coerce_state(state: SorterState | SorterObservation | Mapping[str, Any]):
     if isinstance(state, SorterState):
         return state.model_copy(deep=True)
@@ -82,7 +86,7 @@ def _coerce_action(action: SorterAction | Mapping[str, Any]):
         return ParsedAction(
             segment=_normalize_position_payload_map(action.segment),
             place=_normalize_position_payload_map(action.place),
-            adjust=tuple(action.adjust),
+            adjust=_normalize_adjust_payload(action.adjust),
         )
     if isinstance(action, Mapping):
         action_dict = dict(action)
@@ -100,7 +104,7 @@ def _coerce_action(action: SorterAction | Mapping[str, Any]):
         return ParsedAction(
             segment=_normalize_position_payload_map(segment),
             place=_normalize_position_payload_map(place),
-            adjust=tuple(adjust),
+            adjust=_normalize_adjust_payload(adjust),
         )
     raise TypeError("action must be a SorterAction or mapping.")
 
@@ -118,7 +122,7 @@ def _fallback_action(task: TaskName, action: Any) -> ParsedAction:
             elif task == "place":
                 place = _normalize_position_payload_map(action_payload)
         elif task == "adjust" and isinstance(action_payload, (list, tuple)):
-            adjust = tuple(action_payload)
+            adjust = _normalize_adjust_payload(action_payload)
 
     return ParsedAction(segment=segment, place=place, adjust=adjust)
 
@@ -134,7 +138,7 @@ def _step_max_reward(
 
     if task == "adjust":
         total_objects = len(state.objects_present)
-        adjusted_objects = 1 if len(action.adjust) == 3 else 0
+        adjusted_objects = 1 if len(action.adjust) == 2 else 0
         if total_objects <= 0 or adjusted_objects <= 0:
             return 0.0
         return (TASK_MAX_SCORES["adjust"] / total_objects) * (adjusted_objects)
@@ -148,7 +152,11 @@ def _episode_max_reward(task: TaskName, state: SorterState) -> float:
 
     if task == "adjust":
         total_objects = len(state.objects_present)
-        return TASK_MAX_SCORES["adjust"] if total_objects > 0 else 0.0
+        if total_objects <= 0:
+            return 0.0
+        if getattr(state, "adjust_focus_object", ""):
+            return TASK_MAX_SCORES["adjust"] / total_objects
+        return TASK_MAX_SCORES["adjust"]
 
     raise ValueError(f"Unsupported task: {task}")
 

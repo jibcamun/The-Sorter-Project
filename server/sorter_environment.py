@@ -8,14 +8,22 @@ try:
     from ..config.objects import OBJECTS
     from ..utils.grids import init_grid, weighted_grid
     from ..tasks.segment import segment
-    from ..tasks.adjust import adjust
+    from ..tasks.adjust import (
+        adjust,
+        build_adjust_candidates,
+        top_k_legal_adjustment_positions,
+    )
     from ..tasks.place import place
 except ImportError:
     from models import SorterAction, SorterObservation, SorterState
     from config.objects import OBJECTS
     from utils.grids import init_grid, weighted_grid
     from tasks.segment import segment
-    from tasks.adjust import adjust
+    from tasks.adjust import (
+        adjust,
+        build_adjust_candidates,
+        top_k_legal_adjustment_positions,
+    )
     from tasks.place import place
 
 
@@ -38,6 +46,32 @@ class SorterEnvironment(Environment):
                 }
             )
         return observed_objects
+
+    def _adjust_observed_objects(self, state: SorterState):
+        adjustable_positions = build_adjust_candidates(state)
+        observed_objects = []
+        for obj_name, current_pos in adjustable_positions.items():
+            if state.adjust_focus_object and state.adjust_focus_object != obj_name:
+                continue
+            observed_objects.append(
+                {
+                    "object_name": obj_name,
+                    "current_position": list(current_pos),
+                    "dims": list(OBJECTS[obj_name]["dims"]),
+                    "legal_targets": [
+                        list(pos)
+                        for pos in top_k_legal_adjustment_positions(state, obj_name)
+                    ],
+                }
+            )
+        return observed_objects
+
+    def _adjust_action_options(self, state: SorterState):
+        options = []
+        for item in self._adjust_observed_objects(state):
+            for index, _target in enumerate(item.get("legal_targets", [])):
+                options.append([item["object_name"], index])
+        return options
 
     def _initial_state_kwargs(self, grid_dims, fresh_grid, objs_present):
         state_kwargs = {
@@ -65,6 +99,9 @@ class SorterEnvironment(Environment):
         elif self.task == "adjust":
             state_kwargs.update(
                 positions_adjust={},
+                adjustable_objects=[],
+                adjust_focus_object="",
+                adjust_action_options=[],
             )
 
         return state_kwargs
@@ -96,6 +133,9 @@ class SorterEnvironment(Environment):
             state_kwargs.update(
                 objects_present=state.objects_present,
                 positions_adjust=state.positions_adjust,
+                adjustable_objects=self._adjust_observed_objects(state),
+                adjust_focus_object=state.adjust_focus_object,
+                adjust_action_options=self._adjust_action_options(state),
             )
 
         return state_kwargs

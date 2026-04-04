@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from openai import OpenAI
 from pydantic import ValidationError
+
 from config.objects import OBJECTS
 from server.sorter_environment import SorterEnvironment
 from models import SorterObservation, SorterState
@@ -15,12 +16,6 @@ try:
     from graders import GradeResult, grade_task
 except ImportError:
     from .graders import GradeResult, grade_task
-
-try:
-    from tasks.adjust import build_adjust_candidates
-except ImportError:
-    from .tasks.adjust import build_adjust_candidates
-
 
 load_dotenv()
 
@@ -54,6 +49,9 @@ TASK_OBSERVATION_FIELDS = {
         "grid_dims",
         "objects_present",
         "positions_adjust",
+        "adjustable_objects",
+        "adjust_focus_object",
+        "adjust_action_options",
         "reward",
         "advisory",
         "done",
@@ -68,18 +66,19 @@ SYSTEM_PROMPT = textwrap.dedent(
     Task definitions:
     a) segment: identify object names for the observed objects using only observable information. Each observed object includes its position, dimensions, stackability, and volume. Objects with identical observable signatures may be interchangeable for scoring, so focus on assigning labels consistently within each compatible group. Return exactly one flat mapping from object name to position under the segment key. Do not nest place or adjust inside segment.
     b) place: place all objects into an empty grid efficiently while respecting stackability, always return the name and position of all the objects, both the objects modified and not modified, do not return an empty dictionary
-    c) adjust: return a single tuple of the form ["object_name", "DIRECTION", amount]. The requested direction and amount are the actual move that will be applied if legal. Rewards compare that requested move against the best legal position for the same object, so keep improving one object until it reaches its best legal position.
+    c) adjust: return a single tuple of the form ["object_name", option_index]. The option_index selects one of the exposed legal target options for that object. If the selected option is legal, the object is moved there, reward is based on the direct improvement from the current position, and the episode continues until there are no exposed legal target options left for that object.
 
     Active action schema for this task:
     a) segment: {{"segment": {{"object_name": [x, y, z, stackable], ...}}}}
     b) place: {{"place": {{"object_name": [x, y, z, stackable], ...}}}}
-    c) adjust: {{"adjust": ["object_name", "DIRECTION", amount]}}
+    c) adjust: {{"adjust": ["object_name", option_index]}}
 
     Return only the JSON object for the active task.
     Do not include inactive task fields.
     Do not include explanations, commentary, or extra keys.
-    If there is no valid move, return an empty object for the active task.
-    For adjust, return exactly one tuple when valid_adjustments is not empty.
+    If there is no valid move, return an empty object for segment/place.
+    For adjust, return {{"adjust": []}} when there are no exposed adjust_action_options.
+    For adjust, return exactly one tuple from adjust_action_options when options are available.
 
     Additional context:
     Objects and dimensions: {OBJECTS}
@@ -154,9 +153,11 @@ def build_user_prompt(
         if key in allowed_fields
     }
 
-    valid_adjustments: Dict[str, List[int]] = {}
+    valid_adjustments: Any = []
+    adjust_action_options: Any = []
     if TASK_NAME == "adjust":
-        valid_adjustments = build_adjust_candidates(last_observation)
+        valid_adjustments = observation_payload.get("adjustable_objects", [])
+        adjust_action_options = observation_payload.get("adjust_action_options", [])
 
     advisory_line = (
         f"Advisory: {last_advisory}"
@@ -164,6 +165,7 @@ def build_user_prompt(
         else "Advisory: None"
     )
     segment_guidance = ""
+    adjust_guidance = ""
     if TASK_NAME == "segment":
         segment_guidance = (
             "Segment guidance: assign one object label to each observed position using only observed_objects[].dims, stackable, and volume. "
@@ -172,17 +174,26 @@ def build_user_prompt(
             '{"segment":{"book":[x,y,z,true],"bottle":[x,y,z,false]}}. '
             "Do not put a place key inside segment."
         )
+    if TASK_NAME == "adjust":
+        adjust_guidance = (
+            "Adjust guidance: adjustable_objects contains per-object details, including legal_targets, but the action must come from Adjust action options. "
+            "Choose one exact tuple from Adjust action options and return it unchanged as [object_name, option_index]. "
+            "Do not invent coordinates or option indices. Copy one full option exactly. "
+            "If an adjust_focus_object is already set, all valid options will be for that same object and you must keep using that object."
+        )
 
     return textwrap.dedent(
         f"""
         Step: {step}
         Last observation: {json.dumps(observation_payload, default=_json_default)}
-        Adjustable objects: {json.dumps(valid_adjustments, default=_json_default)}
+        Adjustable objects detail: {json.dumps(valid_adjustments, default=_json_default)}
+        Adjust action options: {json.dumps(adjust_action_options, default=_json_default)}
         Last step reward total: {last_reward_total:.2f}
         Last step reward events: {json.dumps(last_reward_events, default=_json_default)}
         Last step feedback: {json.dumps(last_reward_feedback_events, default=_json_default)}
         {advisory_line}
         {segment_guidance}
+        {adjust_guidance}
         Previous steps:
         {history_block}
         Run the next step.
@@ -224,7 +235,32 @@ def get_model_message(
             ],
             temperature=TEMPERATURE,
         )
-        text = (completion.choices[0].message.content or "").strip()
+        choices = getattr(completion, "choices", None) or []
+        if not choices:
+            raise ValueError("Model response did not include any choices.")
+
+        first_choice = choices[0]
+        message = getattr(first_choice, "message", None)
+        if message is None:
+            raise ValueError("Model response choice did not include a message.")
+
+        content = getattr(message, "content", None)
+        if isinstance(content, str):
+            text = content.strip()
+        elif isinstance(content, list):
+            text_parts = []
+            for part in content:
+                if isinstance(part, dict):
+                    part_text = part.get("text")
+                    if isinstance(part_text, str):
+                        text_parts.append(part_text)
+                else:
+                    part_text = getattr(part, "text", None)
+                    if isinstance(part_text, str):
+                        text_parts.append(part_text)
+            text = "".join(text_parts).strip()
+        else:
+            text = ""
         return text if text else empty_action_json()
     except Exception as exc:
         print(f"[DEBUG] Model request failed: {exc}", flush=True)
@@ -261,11 +297,11 @@ def _normalize_action_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
                 action_value = []
             elif len(action_value) == 1:
                 obj_name, move = next(iter(action_value.items()))
-                if isinstance(move, (list, tuple)) and len(move) == 2:
-                    action_value = [obj_name, move[0], move[1]]
+                if isinstance(move, (list, tuple)) and len(move) == 1:
+                    action_value = [obj_name, move[0]]
                 else:
                     raise ValueError(
-                        "'adjust' dict form must be {'obj_name': ['DIRECTION', amount]}."
+                        "'adjust' dict form must be {'obj_name': [option_index]}."
                     )
             else:
                 raise ValueError(
@@ -290,6 +326,26 @@ def parse_action(message: str) -> Dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Model output JSON must be an object at the top level.")
     return _normalize_action_payload(payload)
+
+
+def _constrain_adjust_action(
+    observation: SorterObservation, action: Dict[str, Any]
+) -> Dict[str, Any]:
+    if TASK_NAME != "adjust":
+        return action
+
+    valid_option_list = [
+        tuple(option)
+        for option in getattr(observation, "adjust_action_options", []) or []
+        if isinstance(option, (list, tuple)) and len(option) == 2
+    ]
+    valid_options = set(valid_option_list)
+    requested = tuple(action.get("adjust", ()))
+
+    if valid_options and requested not in valid_options:
+        return action
+
+    return action
 
 
 def _get_internal_state(env: SorterEnvironment) -> SorterState:
@@ -383,6 +439,8 @@ def main():
                 print(f"[DEBUG] Action parse failed: {exc}", flush=True)
                 parse_error = str(exc)
                 action = json.loads(empty_action_json())
+
+            action = _constrain_adjust_action(last_observation, action)
 
             previous_rewards = list(_get_internal_state(env).reward[0])
             previous_feedback = list(_get_internal_state(env).reward[1])
