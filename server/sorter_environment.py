@@ -9,6 +9,7 @@ try:
     from ..utils.grids import init_grid, weighted_grid
     from ..tasks.segment import segment
     from ..tasks.adjust import (
+        _position_score,
         adjust,
         build_adjust_candidates,
         top_k_legal_adjustment_positions,
@@ -20,6 +21,7 @@ except ImportError:
     from utils.grids import init_grid, weighted_grid
     from tasks.segment import segment
     from tasks.adjust import (
+        _position_score,
         adjust,
         build_adjust_candidates,
         top_k_legal_adjustment_positions,
@@ -53,14 +55,23 @@ class SorterEnvironment(Environment):
         for obj_name, current_pos in adjustable_positions.items():
             if state.adjust_focus_object and state.adjust_focus_object != obj_name:
                 continue
+            current_score = _position_score(state, obj_name, tuple(current_pos))
+            ranked_targets = top_k_legal_adjustment_positions(state, obj_name)
             observed_objects.append(
                 {
                     "object_name": obj_name,
                     "current_position": list(current_pos),
                     "dims": list(OBJECTS[obj_name]["dims"]),
                     "legal_targets": [
-                        list(pos)
-                        for pos in top_k_legal_adjustment_positions(state, obj_name)
+                        {
+                            "option_index": index,
+                            "position": list(pos),
+                            "projected_score": float(_position_score(state, obj_name, pos)),
+                            "score_delta": float(
+                                _position_score(state, obj_name, pos) - current_score
+                            ),
+                        }
+                        for index, pos in enumerate(ranked_targets)
                     ],
                 }
             )
@@ -101,6 +112,8 @@ class SorterEnvironment(Environment):
                 positions_adjust={},
                 adjustable_objects=[],
                 adjust_focus_object="",
+                adjust_start_position=(),
+                adjust_visited_positions=[],
                 adjust_action_options=[],
             )
 
@@ -135,6 +148,8 @@ class SorterEnvironment(Environment):
                 positions_adjust=state.positions_adjust,
                 adjustable_objects=self._adjust_observed_objects(state),
                 adjust_focus_object=state.adjust_focus_object,
+                adjust_start_position=state.adjust_start_position,
+                adjust_visited_positions=state.adjust_visited_positions,
                 adjust_action_options=self._adjust_action_options(state),
             )
 

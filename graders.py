@@ -6,11 +6,13 @@ from typing import Any, Dict, Literal, Mapping
 try:
     from .models import SorterAction, SorterObservation, SorterState
     from .tasks.adjust import adjust as run_adjust
+    from .tasks.adjust import _legal_adjustment_positions, _position_score
     from .tasks.place import place as run_place
     from .tasks.segment import segment as run_segment
 except ImportError:
     from models import SorterAction, SorterObservation, SorterState
     from tasks.adjust import adjust as run_adjust
+    from tasks.adjust import _legal_adjustment_positions, _position_score
     from tasks.place import place as run_place
     from tasks.segment import segment as run_segment
 
@@ -185,6 +187,48 @@ def _result_from_state(task: TaskName, state: SorterState, action: ParsedAction)
     )
 
 
+def _adjust_progress_fraction(state: SorterState) -> float:
+    focus_object = getattr(state, "adjust_focus_object", "")
+    if not focus_object or focus_object not in state.objects_present:
+        return 0.0
+
+    current_pos = state.objects_present[focus_object][:3]
+    start_pos = getattr(state, "adjust_start_position", ()) or state.objects_present[
+        focus_object
+    ]
+    initial_score = _position_score(state, focus_object, start_pos[:3])
+    current_score = _position_score(state, focus_object, current_pos)
+    legal_positions = _legal_adjustment_positions(state, focus_object)
+    best_reachable_score = max(
+        [current_score, *(_position_score(state, focus_object, pos) for pos in legal_positions)]
+    )
+
+    achievable_improvement = best_reachable_score - initial_score
+    achieved_improvement = current_score - initial_score
+    if achievable_improvement <= 0:
+        return 1.0
+    return max(0.0, min(achieved_improvement / achievable_improvement, 1.0))
+
+
+def grade_adjust_progress(state: SorterState | SorterObservation | Mapping[str, Any]):
+    graded_state = _coerce_state(state)
+    _validate_state_for_task("adjust", graded_state)
+    parsed_action = ParsedAction(segment={}, place={}, adjust=())
+    result = _result_from_state("adjust", graded_state, parsed_action)
+    progress_fraction = _adjust_progress_fraction(graded_state)
+    result.raw_score = result.max_score * progress_fraction
+    result.normalized_score = progress_fraction
+    result.feedback = [
+        *result.feedback,
+        (
+            "adjust progress grading: rollout ended before task completion; "
+            f"awarded {progress_fraction:.3f} of achievable improvement for "
+            f"'{getattr(graded_state, 'adjust_focus_object', '')}'."
+        ),
+    ]
+    return result
+
+
 def _record_failure(
     task: TaskName, state: SorterState, action: ParsedAction, message: str
 ) -> GradeResult:
@@ -311,6 +355,7 @@ __all__ = [
     "SUCCESS_SCORE_THRESHOLD",
     "TASK_MAX_SCORES",
     "grade_adjust",
+    "grade_adjust_progress",
     "grade_payload",
     "grade_place",
     "grade_segment",

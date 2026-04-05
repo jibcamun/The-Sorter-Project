@@ -13,9 +13,9 @@ from server.sorter_environment import SorterEnvironment
 from models import SorterObservation, SorterState
 
 try:
-    from graders import GradeResult, grade_task
+    from graders import GradeResult, grade_adjust_progress, grade_task
 except ImportError:
-    from .graders import GradeResult, grade_task
+    from .graders import GradeResult, grade_adjust_progress, grade_task
 
 load_dotenv()
 
@@ -23,7 +23,7 @@ API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://integrate.api.nvidia.com/v1"
 MODEL_NAME = os.getenv("MODEL_NAME") or "openai/gpt-oss-120b"
-TASK_NAME = os.getenv("THE_SORTER_PROJECT_TASK", "adjust") or "adjust"
+TASK_NAME = os.getenv("THE_SORTER_PROJECT_TASK", "place") or "place"
 BENCHMARK = os.getenv("THE_SORTER_PROJECT_BENCHMARK", "the_sorter_project")
 MAX_STEPS = 8
 TEMPERATURE = 0.7
@@ -66,7 +66,7 @@ SYSTEM_PROMPT = textwrap.dedent(
     Task definitions:
     a) segment: identify object names for the observed objects using only observable information. Each observed object includes its position, dimensions, stackability, and volume. Objects with identical observable signatures may be interchangeable for scoring, so focus on assigning labels consistently within each compatible group. Return exactly one flat mapping from object name to position under the segment key. Do not nest place or adjust inside segment.
     b) place: place all objects into an empty grid efficiently while respecting stackability, always return the name and position of all the objects, both the objects modified and not modified, do not return an empty dictionary
-    c) adjust: return a single tuple of the form ["object_name", option_index]. The option_index selects one of the exposed legal target options for that object. If the selected option is legal, the object is moved there, reward is based on the direct improvement from the current position, and the episode continues until there are no exposed legal target options left for that object.
+    c) adjust: return a single tuple of the form ["object_name", option_index]. The option_index selects one of the exposed legal target options for that object. Option indices are recomputed from the current state on every step, so do not count upward across steps. Pick the best current option based on the exposed target details, usually the option with the highest score_delta and often index 0.
 
     Active action schema for this task:
     a) segment: {{"segment": {{"object_name": [x, y, z, stackable], ...}}}}
@@ -171,7 +171,7 @@ def build_user_prompt(
             "Segment guidance: assign one object label to each observed position using only observed_objects[].dims, stackable, and volume. "
             "Do not rely on hidden candidate label lists; infer from the object catalog and the observation only. "
             "Return a flat mapping like "
-            '{"segment":{"book":[x,y,z,true],"bottle":[x,y,z,false]}}. '
+            '{"segment":{"book":[x,y,z,true],"bottle":[x,y,z,false]}}'
             "Do not put a place key inside segment."
         )
     if TASK_NAME == "adjust":
@@ -179,6 +179,8 @@ def build_user_prompt(
             "Adjust guidance: adjustable_objects contains per-object details, including legal_targets, but the action must come from Adjust action options. "
             "Choose one exact tuple from Adjust action options and return it unchanged as [object_name, option_index]. "
             "Do not invent coordinates or option indices. Copy one full option exactly. "
+            "Important: option_index is not a plan step. It is recomputed after each move. "
+            "Do not walk through 0, 1, 2, 3 across turns unless the current exposed score_delta data supports that choice. "
             "If an adjust_focus_object is already set, all valid options will be for that same object and you must keep using that object."
         )
 
@@ -481,6 +483,14 @@ def main():
 
             if done:
                 break
+
+        if (
+            TASK_NAME == "adjust"
+            and final_grade is not None
+            and not final_grade.done
+            and steps_taken >= MAX_STEPS
+        ):
+            final_grade = grade_adjust_progress(_get_internal_state(env))
 
         if final_grade is not None:
             score = final_grade.normalized_score

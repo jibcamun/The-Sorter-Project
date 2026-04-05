@@ -128,6 +128,12 @@ def _position_score(state: SorterState, obj_name: str, pos: tuple) -> float:
     )
 
 
+def _is_improvement_significant(
+    current_score: float, new_score: float, eps: float = 0.01
+) -> bool:
+    return (new_score - current_score) > eps
+
+
 def _best_adjustment_position(state: SorterState, obj_name: str) -> tuple | None:
     init_pos = state.objects_present[obj_name]
     dims = tuple(OBJECTS[obj_name]["dims"])
@@ -153,12 +159,19 @@ def _best_adjustment_position(state: SorterState, obj_name: str) -> tuple | None
 def _legal_adjustment_positions(state: SorterState, obj_name: str) -> list[tuple]:
     dims = tuple(OBJECTS[obj_name]["dims"])
     legal_positions = []
+    visited_positions = {
+        tuple(pos)
+        for pos in getattr(state, "adjust_visited_positions", [])
+        if isinstance(pos, (list, tuple)) and len(pos) == 3
+    }
 
     for x in range(state.grid_dims[0] - dims[0] + 1):
         for y in range(state.grid_dims[1] - dims[1] + 1):
             for z in range(state.grid_dims[2] - dims[2] + 1):
                 new_pos = (x, y, z)
                 if new_pos == state.objects_present[obj_name][:3]:
+                    continue
+                if visited_positions and new_pos in visited_positions:
                     continue
                 if _is_legal_adjustment(state, obj_name, new_pos):
                     legal_positions.append(new_pos)
@@ -172,7 +185,9 @@ def _improving_adjustment_positions(state: SorterState, obj_name: str) -> list[t
     improving_positions = []
 
     for pos in _legal_adjustment_positions(state, obj_name):
-        if _position_score(state, obj_name, pos) > current_score:
+        if _is_improvement_significant(
+            current_score, _position_score(state, obj_name, pos)
+        ):
             improving_positions.append(pos)
 
     return improving_positions
@@ -182,12 +197,7 @@ def top_k_legal_adjustment_positions(
     state: SorterState, obj_name: str, k: int = 5
 ) -> list[tuple]:
     legal_positions = _legal_adjustment_positions(state, obj_name)
-    ranked_positions = sorted(
-        legal_positions,
-        key=lambda pos: _position_score(state, obj_name, pos),
-        reverse=True,
-    )
-    return ranked_positions[:k]
+    return legal_positions[:k]
 
 
 def _adjustment_reward(
@@ -252,13 +262,15 @@ def adjust(state: SorterState, adjustment: Tuple[str, int] | Tuple[()]):
         compute_reward(
             state,
             0.0,
-            f"adjust: Object '{obj}' has no legal target positions available.",
+            f"adjust: Object '{obj}' has no unvisited legal target positions available.",
         )
         state.done = True
         return
 
     if not getattr(state, "adjust_focus_object", ""):
         state.adjust_focus_object = obj
+        state.adjust_start_position = init_pos
+        state.adjust_visited_positions = [tuple(init_pos[:3])]
     elif state.adjust_focus_object != obj:
         compute_reward(
             state,
@@ -307,10 +319,13 @@ def adjust(state: SorterState, adjustment: Tuple[str, int] | Tuple[()]):
     ] = 1
     state.positions_adjust[obj] = updated_pos
     state.objects_present[obj] = updated_pos
+    visited_positions = list(getattr(state, "adjust_visited_positions", []))
+    visited_positions.append(tuple(requested_pos))
+    state.adjust_visited_positions = visited_positions
     new_score = _position_score(state, obj, requested_pos)
     compute_reward(
         state,
         _adjustment_reward(current_score, new_score, reward_per_obj),
         _adjustment_feedback(obj, current_score, new_score),
     )
-    state.done = not bool(top_k_legal_adjustment_positions(state, obj))
+    state.done = not bool(_improving_adjustment_positions(state, obj))
