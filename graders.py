@@ -98,8 +98,6 @@ def _coerce_action(action: SorterAction | Mapping[str, Any]):
 
         if not isinstance(segment, Mapping):
             raise TypeError("segment action must be a mapping.")
-        if not isinstance(place, Mapping):
-            raise TypeError("place action must be a mapping.")
         if not isinstance(adjust, (list, tuple)):
             raise TypeError("adjust action must be a list or tuple.")
 

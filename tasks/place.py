@@ -14,6 +14,7 @@ except:
 
 
 OBJECTIVE_SCALE = 1000
+PLACE_IMPROVEMENT_EPS = 1e-3
 
 
 def _placement_score(weighted_grid, obj_name: str, pos: tuple) -> float:
@@ -36,6 +37,14 @@ def _total_placement_score(weighted_grid, positions: Dict[str, tuple]) -> float:
         _placement_score(weighted_grid, obj_name, pos)
         for obj_name, pos in positions.items()
     )
+
+
+def _placement_reward_delta(
+    weighted_grid, previous_positions: Dict[str, tuple], new_positions: Dict[str, tuple]
+) -> float:
+    previous_score = _total_placement_score(weighted_grid, previous_positions)
+    new_score = _total_placement_score(weighted_grid, new_positions)
+    return new_score - previous_score
 
 
 def _enumerate_candidates(grid_dims: tuple, obj_name: str):
@@ -118,14 +127,14 @@ def _optimal_placements(state: SorterState):
     status = solver.Solve(model)
 
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        return None
+        return None, status
 
     optimal = {}
     for (obj_name, pos), var in candidate_vars.items():
         if solver.Value(var):
             optimal[obj_name] = pos
 
-    return optimal
+    return optimal, status
 
 
 def _wrong_objects_feedback(agent_positions: Dict[str, tuple], optimal_positions: Dict[str, tuple]) -> str:
@@ -141,55 +150,28 @@ def _wrong_objects_feedback(agent_positions: Dict[str, tuple], optimal_positions
     return f"place: Objects needing better placement: {', '.join(wrong_objects)}"
 
 
-def _matches_optimal_score(state: SorterState, optimal_positions: Dict[str, tuple] | None) -> bool:
-    if optimal_positions is None:
-        return False
-    if set(state.positions_place.keys()) != set(state.objects_present.keys()):
-        return False
-
-    achieved_score = _total_placement_score(state.weighted_grid, state.positions_place)
-    optimal_score = _total_placement_score(state.weighted_grid, optimal_positions)
-    tolerance = len(state.objects_present) / OBJECTIVE_SCALE
-    return abs(achieved_score - optimal_score) <= tolerance
-
-
-def _is_place_done(state: SorterState, optimal_positions: Dict[str, tuple] | None) -> bool:
-    return _matches_optimal_score(state, optimal_positions)
-
-
-def place(state: SorterState, placements: Dict[str, Tuple[int, int, int, bool]]):
-    grid_dims = state.grid_dims
-    state.done = False
-    state.advisory = []
-
-    grid = zeros(grid_dims)
-    wt_grid = state.weighted_grid
-    staged_positions = {}
-
-    reward_per_obj = (
-        50.0 / len(placements.keys()) if len(placements.keys()) > 0 else 0.0
+def _has_full_support(grid, obj_name: str, pos: tuple) -> bool:
+    dims = tuple(OBJECTS[obj_name]["dims"])
+    if pos[2] == 0:
+        return True
+    return all(
+        grid[
+            pos[0] : pos[0] + dims[0],
+            pos[1] : pos[1] + dims[1],
+            pos[2] - 1,
+        ]
+        == 1
     )
 
-    if set(placements.keys()) != set(state.objects_present.keys()):
-        compute_reward(
-            state,
-            -reward_per_obj,
-            "place: All the objects present in the grid was not passed as input. It must be passed irrespective of whether the position is changed or not.",
-        )
-        state.done = False
-        return
 
-    objs_alrdy_present = dict(state.positions_place)
+def _is_complete_valid_layout(
+    state: SorterState, placements: Dict[str, Tuple[int, int, int, bool]]
+) -> tuple[bool, str | None, object]:
+    grid = zeros(state.grid_dims)
 
     for obj, pos in placements.items():
         if obj not in OBJECTS:
-            compute_reward(
-                state,
-                -reward_per_obj,
-                f"place: Object '{obj}' is not a valid known object",
-            )
-            state.done = False
-            return
+            return False, f"place: Object '{obj}' is not a valid known object", grid
 
         dimns = OBJECTS[obj]["dims"]
         stack = OBJECTS[obj]["stack"]
@@ -202,15 +184,13 @@ def place(state: SorterState, placements: Dict[str, Tuple[int, int, int, bool]])
             or pos[1] + dimns[1] > grid.shape[1]
             or pos[2] + dimns[2] > grid.shape[2]
         ):
-            compute_reward(
-                state,
-                -reward_per_obj,
+            return (
+                False,
                 f"place: Object '{obj}' is out of bounds with respect to grid",
+                grid,
             )
-            state.done = False
-            return
 
-        if all(
+        if not all(
             grid[
                 pos[0] : pos[0] + dimns[0],
                 pos[1] : pos[1] + dimns[1],
@@ -218,77 +198,102 @@ def place(state: SorterState, placements: Dict[str, Tuple[int, int, int, bool]])
             ]
             == 0
         ):
-            if pos[2] == 0:
-                grid[
-                    pos[0] : pos[0] + dimns[0],
-                    pos[1] : pos[1] + dimns[1],
-                    pos[2] : pos[2] + dimns[2],
-                ] += 1
-                if (
-                    objs_alrdy_present.get(obj) is None
-                    or objs_alrdy_present[obj] != pos
-                ):
-                    compute_reward(
-                        state,
-                        _placement_score(wt_grid, obj, pos) * reward_per_obj,
-                        f"place: Object '{obj}' placed successfully",
-                    )
-                else:
-                    compute_reward(
-                        state,
-                        0.0,
-                        f"place: Object '{obj}' kept at its current valid placement",
-                    )
-                staged_positions[obj] = pos
-            elif stack and all(
-                grid[
-                    pos[0] : pos[0] + dimns[0],
-                    pos[1] : pos[1] + dimns[1],
-                    pos[2] - 1,
-                ]
-                == 1
-            ):
-                grid[
-                    pos[0] : pos[0] + dimns[0],
-                    pos[1] : pos[1] + dimns[1],
-                    pos[2] : pos[2] + dimns[2],
-                ] += 1
-                if (
-                    objs_alrdy_present.get(obj) is None
-                    or objs_alrdy_present[obj] != pos
-                ):
-                    compute_reward(
-                        state,
-                        _placement_score(wt_grid, obj, pos) * reward_per_obj,
-                        f"place: Object '{obj}' placed successfully",
-                    )
-                else:
-                    compute_reward(
-                        state,
-                        0.0,
-                        f"place: Object '{obj}' kept at its current valid placement",
-                    )
-                staged_positions[obj] = pos
-            else:
-                compute_reward(
-                    state,
-                    -reward_per_obj,
-                    f"place: Object '{obj}' could not be placed as there was no support below it",
-                )
-        else:
-            compute_reward(
-                state,
-                -reward_per_obj,
-                f"place: Object '{obj}' could not be placed as the give space is already occupied",
+            return (
+                False,
+                f"place: Object '{obj}' could not be placed as the given space is already occupied",
+                grid,
             )
 
+        if pos[2] > 0 and (not stack or not _has_full_support(grid, obj, pos)):
+            return (
+                False,
+                f"place: Object '{obj}' could not be placed as there was no support below it",
+                grid,
+            )
+
+        grid[
+            pos[0] : pos[0] + dimns[0],
+            pos[1] : pos[1] + dimns[1],
+            pos[2] : pos[2] + dimns[2],
+        ] = 1
+
+    return True, None, grid
+
+
+def _placement_feedback(
+    wt_grid,
+    previous_positions: Dict[str, tuple],
+    new_positions: Dict[str, tuple],
+) -> str:
+    changed_objects = sorted(
+        obj_name
+        for obj_name, pos in new_positions.items()
+        if previous_positions.get(obj_name) != pos
+    )
+    if not changed_objects:
+        return "place: Layout kept unchanged."
+
+    delta = _placement_reward_delta(wt_grid, previous_positions, new_positions)
+    if delta > PLACE_IMPROVEMENT_EPS:
+        return f"place: Valid layout improved for objects: {', '.join(changed_objects)}"
+    if delta < -PLACE_IMPROVEMENT_EPS:
+        return f"place: Valid layout worsened for objects: {', '.join(changed_objects)}"
+    return f"place: Valid layout updated with negligible score change for objects: {', '.join(changed_objects)}"
+
+
+def place(state: SorterState, placements: Dict[str, Tuple[int, int, int, bool]]):
+    state.done = False
+    state.advisory = []
+    wt_grid = state.weighted_grid
+    target_objects = set(state.objects_present.keys())
+    reward_per_obj = 50.0 / len(target_objects) if target_objects else 0.0
+    previous_positions = dict(state.positions_place)
+    proposed_positions = dict(previous_positions)
+    proposed_positions.update(placements)
+
+    if set(proposed_positions.keys()) != target_objects:
+        missing_objects = sorted(target_objects - set(proposed_positions.keys()))
+        compute_reward(
+            state,
+            -reward_per_obj,
+            (
+                "place: Layout is incomplete. Missing placements for objects: "
+                f"{', '.join(missing_objects)}"
+            ),
+        )
+        return
+
+    is_valid, error_message, grid = _is_complete_valid_layout(state, proposed_positions)
+    if not is_valid:
+        compute_reward(state, -reward_per_obj, error_message)
+        return
+
+    delta_score = _placement_reward_delta(wt_grid, previous_positions, proposed_positions)
+    reward = max(-50.0, min(delta_score * reward_per_obj, 50.0))
+    compute_reward(
+        state,
+        reward,
+        _placement_feedback(wt_grid, previous_positions, proposed_positions),
+    )
+
     state.current_grid = grid
-    state.positions_place = staged_positions
-    optimal_positions = _optimal_placements(state)
-    state.done = _is_place_done(state, optimal_positions)
-    if optimal_positions is not None:
+    state.positions_place = proposed_positions
+    state.done = True
+
+    optimal_positions, optimal_status = _optimal_placements(state)
+    if optimal_positions is None:
+        return
+
+    if optimal_status == cp_model.OPTIMAL:
+        achieved_score = _total_placement_score(state.weighted_grid, state.positions_place)
+        optimal_score = _total_placement_score(state.weighted_grid, optimal_positions)
+        tolerance = len(state.objects_present) / OBJECTIVE_SCALE
         state.advisory.append(
             "place: Current placement achieves the optimal total score."
-            if state.done
+            if abs(achieved_score - optimal_score) <= tolerance
             else _wrong_objects_feedback(state.positions_place, optimal_positions)
+        )
+    else:
+        state.advisory.append(
+            "place: Valid layout accepted. Exact optimal comparison unavailable because the solver returned only a feasible solution."
         )
