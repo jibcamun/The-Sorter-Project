@@ -18,6 +18,7 @@ class SorterEnv(EnvClient[SorterAction, SorterObservation, SorterState]):
             "weighted_grid": payload.get("weighted_grid"),
             "current_grid": payload.get("current_grid"),
             "reward": payload.get("reward", ([], [])),
+            "advisory": payload.get("advisory", []),
             "done": payload.get("done", False),
         }
 
@@ -27,6 +28,13 @@ class SorterEnv(EnvClient[SorterAction, SorterObservation, SorterState]):
             "positions_segment",
             "positions_adjust",
             "positions",
+            "observed_objects",
+            "last_segment_attempt",
+            "adjustable_objects",
+            "adjust_focus_object",
+            "adjust_start_position",
+            "adjust_visited_positions",
+            "adjust_action_options",
         )
         for field in optional_fields:
             if field in payload:

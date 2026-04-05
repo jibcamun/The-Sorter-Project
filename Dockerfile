@@ -21,18 +21,10 @@ RUN if ! command -v uv >/dev/null 2>&1; then \
     fi
     
 RUN --mount=type=cache,target=/root/.cache/uv \
-    if [ -f uv.lock ]; then \
-        uv sync --frozen --no-install-project --no-editable; \
-    else \
-        uv sync --no-install-project --no-editable; \
-    fi
+    uv sync --no-install-project --no-editable
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    if [ -f uv.lock ]; then \
-        uv sync --frozen --no-editable; \
-    else \
-        uv sync --no-editable; \
-    fi
+    uv sync --no-editable
 
 FROM ${BASE_IMAGE}
 
@@ -49,4 +41,4 @@ ENV PYTHONPATH="/app/env:$PYTHONPATH"
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-CMD ["sh", "-c", "cd /app/env && uvicorn server.app:app --host 0.0.0.0 --port 8000 & python3 inference.py"]
+CMD ["sh", "-c", "cd /app/env && python3 inference.py"]

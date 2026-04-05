@@ -17,11 +17,11 @@ dependencies = [
     # Core OpenEnv runtime (provides FastAPI server + HTTP client types)
     # install from github
     # "openenv-core[core] @ git+https://github.com/meta-pytorch/OpenEnv.git",
-    "openenv-core[core]>=0.2.1",
-    "numpy>=1.26.0",
-    "openai>=1.0.0",
-    "ortools>=9.10.4067",
-    "python-dotenv>=1.0.0",
+    "openenv-core",
+    "numpy",
+    "openai",
+    "ortools",
+    "python-dotenv",
     # Environment-specific dependencies
     # Add all dependencies needed for your environment here
     # Examples:
@@ -45,5 +45,13 @@ server = "sorter.server.app:main"
 
 [tool.setuptools]
 include-package-data = true
-packages = ["sorter", "sorter.server"]
-package-dir = { "sorter" = ".", "sorter.server" = "server" }
+packages = [
+    "sorter",
+    "sorter.config",
+    "sorter.model_types",
+    "sorter.models",
+    "sorter.server",
+    "sorter.tasks",
+    "sorter.utils",
+]
+package-dir = { "sorter" = ".", "sorter.config" = "config", "sorter.model_types" = "model_types", "sorter.models" = "models", "sorter.server" = "server", "sorter.tasks" = "tasks", "sorter.utils" = "utils" }

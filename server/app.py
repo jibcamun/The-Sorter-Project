@@ -36,11 +36,11 @@ except Exception as e:  # pragma: no cover
     ) from e
 
 try:
-    from ..models import SorterAction, SorterObservation
-    from .sorter_environment import SorterEnvironment
-except ModuleNotFoundError:
     from models import SorterAction, SorterObservation
     from server.sorter_environment import SorterEnvironment
+except ImportError:
+    from ..models import SorterAction, SorterObservation
+    from .sorter_environment import SorterEnvironment
 
 
 # Create the app with web interface and README integration

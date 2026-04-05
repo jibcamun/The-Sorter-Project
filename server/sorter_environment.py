@@ -1,21 +1,10 @@
+import os
 from uuid import uuid4
 
 from openenv.core.env_server.interfaces import Environment
 from openenv.core.env_server.types import State
 
 try:
-    from ..models import SorterAction, SorterObservation, SorterState
-    from ..config.objects import OBJECTS
-    from ..utils.grids import init_grid, weighted_grid
-    from ..tasks.segment import segment
-    from ..tasks.adjust import (
-        _position_score,
-        adjust,
-        build_adjust_candidates,
-        top_k_legal_adjustment_positions,
-    )
-    from ..tasks.place import place
-except ImportError:
     from models import SorterAction, SorterObservation, SorterState
     from config.objects import OBJECTS
     from utils.grids import init_grid, weighted_grid
@@ -27,10 +16,24 @@ except ImportError:
         top_k_legal_adjustment_positions,
     )
     from tasks.place import place
+except ImportError:
+    from ..models import SorterAction, SorterObservation, SorterState
+    from ..config.objects import OBJECTS
+    from ..utils.grids import init_grid, weighted_grid
+    from ..tasks.segment import segment
+    from ..tasks.adjust import (
+        _position_score,
+        adjust,
+        build_adjust_candidates,
+        top_k_legal_adjustment_positions,
+    )
+    from ..tasks.place import place
 
 
 class SorterEnvironment(Environment):
     SUPPORTS_CONCURRENT_SESSIONS: bool = True
+    DEFAULT_TASK = "place"
+    VALID_TASKS = {"segment", "place", "adjust"}
 
     def _segment_observed_objects(self, state: SorterState):
         observed_objects = []
@@ -161,10 +164,17 @@ class SorterEnvironment(Environment):
         observation_kwargs.pop("step_count", None)
         return SorterObservation(**observation_kwargs)
 
-    def __init__(self, task):
+    def __init__(self, task: str | None = None):
         fresh_grid, objs_present = init_grid()
         grid_dims = tuple(int(dim) for dim in fresh_grid.shape)
-        self.task = task
+        resolved_task = task or os.getenv(
+            "THE_SORTER_PROJECT_TASK", self.DEFAULT_TASK
+        )
+        if resolved_task not in self.VALID_TASKS:
+            raise ValueError(
+                f"Unsupported task '{resolved_task}'. Expected one of {sorted(self.VALID_TASKS)}."
+            )
+        self.task = resolved_task
         self.step_count = 0
         self._state = SorterState(
             **self._initial_state_kwargs(grid_dims, fresh_grid, objs_present)
