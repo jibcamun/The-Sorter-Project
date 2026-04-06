@@ -84,14 +84,13 @@ $$
 R =
 \begin{aligned}
 &\text{segment (valid): } \sum_{o \in O} \frac{20}{N}(2I[o]-1) \\
-&\text{adjust (valid): } \mathrm{clamp}\!\left(\frac{30}{N}(\mathrm{score}(o,p_{\text{new}})-\mathrm{score}(o,p_{\text{old}})), -\frac{30}{N}, \frac{30}{N}\right) \\
-&\text{place (valid): } \mathrm{clamp}\!\left(\frac{50}{N}(L(P_{\text{new}})-L(P_{\text{old}})), -50, 50\right) \\
+&\text{adjust (valid): } \mathrm{clamp}\left(\frac{30}{N}(\mathrm{score}(o,p_{\text{new}})-\mathrm{score}(o,p_{\text{old}})), -\frac{30}{N}, \frac{30}{N}\right) \\
+&\text{place (valid): } \mathrm{clamp}\left(\frac{50}{N}(L(P_{\text{new}})-L(P_{\text{old}})), -50, 50\right) \\
 &\text{invalid segment: } -\frac{20}{N} \\
 &\text{invalid adjust: } -\frac{30}{N} \\
 &\text{invalid place: } -\frac{50}{N}
 \end{aligned}
 $$
-
 
 #### Explanation
 Let:
