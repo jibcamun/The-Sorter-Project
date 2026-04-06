@@ -81,7 +81,7 @@ The `place` task is to modify or place *all* the objects in the most "optimal" p
 ### Reward Logic
 #### Mathematical Formulation
 $$
-R =
+Reward =
 \begin{cases}
 \sum_{o \in O} \frac{20}{N}(2I[o]-1), & \text{valid segment} \\
 \mathrm{clamp}\left(\frac{30}{N}(\mathrm{score}(o,p_{\text{new}})-\mathrm{score}(o,p_{\text{old}})), -\frac{30}{N}, \frac{30}{N}\right), & \text{valid adjust} \\
@@ -92,6 +92,7 @@ R =
 \end{cases}
 $$
 
+Here, $O$ is the set of objects in the episode, $N$ is the total number of objects, $I[o]$ is an indicator that is $1$ when object $o$ is segmented at the exact correct position and $0$ otherwise, $p_{\text{old}}$ and $p_{\text{new}}$ are the old and new positions of an object during adjustment, $\mathrm{score}(o, p)$ is the mean value of the `weighted_grid` over the cells occupied by object $o$ at position $p$, $P_{\text{old}}$ and $P_{\text{new}}$ are the previous and proposed complete layouts, $L(P)$ is the total score of a layout obtained by summing object scores across all objects, and $\mathrm{clamp}(x, a, b)$ restricts a value $x$ to the interval $[a, b]$.
 
 #### Explanation
 Let:
