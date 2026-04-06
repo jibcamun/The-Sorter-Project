@@ -76,9 +76,7 @@ The `place` task is to modify or place *all* the objects in the most "optimal" p
 - `place` is the most open ended task, so it exposes the object set and current placements while still hiding the optimizer's solution. The agent must learn to improve layouts from reward and constraints rather than copy an oracle plan.
 - The full layout requirement is clear, the policy is evaluated on global arrangement quality, not isolated object moves. This makes `place` a true reorganization task rather than a repeated version of `adjust`.
 
-## Technical Details
-
-### Reward Logic
+## Reward Logic
 #### Mathematical Formulation
 $$
 Reward =
@@ -97,24 +95,24 @@ Here, $O$ is the set of objects in the episode, $N$ is the total number of objec
 #### Explanation
 Let:
 
-- `N` = total number of objects in the current episode
-- `score(obj, pos)` = mean value of the `weighted_grid` over the cells occupied by an object at `pos`
-- `layout_score(layout)` = sum of `score(obj, pos)` over all placed objects
+- $N$ = total number of objects in the current episode
+- $\mathrm{score}(\mathrm{obj}, \mathrm{pos})$ = mean value of the `weighted_grid` over the cells occupied by an object at $\mathrm{pos}$
+- $\mathrm{layout\_score}(\mathrm{layout})$ = sum of $\mathrm{score}(\mathrm{obj}, \mathrm{pos})$ over all placed objects
 
 Rewards are stored as an event log: the environment appends both the numeric reward and a matching text feedback message after each action. The observation returns the latest numeric reward as `reward`, and the full log as `reward_details`.
 
 **Task 1 (`segment`)**
 
-- Base unit: `20 / N`
+- Base unit: $20 / N$
 - For each submitted object:
-- `+20 / N` if the object name is valid and its predicted position exactly matches the ground-truth position
-- `-20 / N` if the object name is unknown or the position is wrong
-- `-20 / N` for malformed submissions, such as the wrong number of objects or nested task keys in the payload
+- $+20 / N$ if the object name is valid and its predicted position exactly matches the ground-truth position
+- $-20 / N$ if the object name is unknown or the position is wrong
+- $-20 / N$ for malformed submissions, such as the wrong number of objects or nested task keys in the payload
 - The task finishes only when every object has been labeled correctly
 
 **Task 2 (`adjust`)**
 
-- Base unit: `30 / N`
+- Base unit: $30 / N$
 - Only one object can be adjusted per step, and the episode stays locked onto that same object after the first valid choice
 - Legal moves must:
 - stay inside the grid
@@ -122,41 +120,142 @@ Rewards are stored as an event log: the environment appends both the numeric rew
 - keep full support underneath the object
 - avoid moving objects that have something stacked on top of them
 - For a legal move, reward is based on score improvement:
-- `reward = clamp((new_score - current_score) * (30 / N), -(30 / N), +(30 / N))`
+- $\mathrm{reward} = \mathrm{clamp}((\mathrm{new\_score} - \mathrm{current\_score}) \cdot (30 / N), -(30 / N), +(30 / N))$
 - This means:
 - positive reward for improving the object's weighted-grid score
 - zero reward if the move is legal but does not improve the score
 - negative reward for legal moves that make the position worse
-- Invalid actions receive `-30 / N`
-- If there are no remaining legal target positions for the chosen object, the environment returns `0` and ends the episode
+- Invalid actions receive $-30 / N$
+- If there are no remaining legal target positions for the chosen object, the environment returns $0$ and ends the episode
 - The episode also ends once there are no unvisited legal moves that improve the score further
 
 **Task 3 (`place`)**
 
-- Base unit: `50 / N`
+- Base unit: $50 / N$
 - The action is evaluated as a complete layout: every object must have a placement
-- A proposed layout is rejected with `-50 / N` if it is incomplete, out of bounds, overlapping, or unsupported
+- A proposed layout is rejected with $-50 / N$ if it is incomplete, out of bounds, overlapping, or unsupported
 - For a valid layout, reward is based on total layout improvement relative to the previous accepted layout:
-- `reward = clamp((layout_score(new) - layout_score(previous)) * (50 / N), -50, +50)`
+- $\mathrm{reward} = \mathrm{clamp}((\mathrm{layout\_score}(\mathrm{new}) - \mathrm{layout\_score}(\mathrm{previous})) \cdot (50 / N), -50, +50)$
 - This means the agent is rewarded for improving the total weighted-grid score of the whole arrangement, not just for matching a single hard-coded target placement
 - After accepting a valid layout, the environment compares it against an OR-Tools optimizer result and adds advisory feedback indicating whether:
 - the layout is optimal
 - some objects still have better placements available
 - or only a feasible reference solution was found within the solver time limit
+
+## API Documentation
+
+The environment is exposed through a FastAPI server defined in `server/app.py`. The OpenEnv server exposes the sorter environment over both HTTP and WebSocket interfaces.
+
+**Base runtime**
+
+- App entrypoint: `server.app:app`
+- Default port: `8000`
+- Runtime: `fastapi`
+
+**Available endpoints**
+
+- `POST /reset`: starts a fresh episode and returns the initial observation
+- `POST /step`: applies one `SorterAction` and returns the next observation
+- `GET /state`: returns the current internal environment state
+- `GET /schema`: returns the action and observation schemas exposed by the environment
+- `WS /ws`: opens a persistent session for interactive environment control
+
+**Typical interaction flow**
+
+1. Call `POST /reset` to initialize a new environment episode.
+2. Read the returned observation fields relevant to the current task.
+3. Send an action to `POST /step` using one of `segment`, `adjust`, or `place`.
+4. Inspect `reward`, `reward_details`, `advisory`, and `done` in the returned observation.
+5. Continue calling `POST /step` until `done` becomes `true`.
+
+## Action And Observation Schema
+
+The environment uses three core Pydantic models: `SorterAction`, `SorterObservation`, and `SorterState`.
+
+**Position representation**
+
+- `PositionTuple = (x, y, z, rotated)`
+- `x`, `y`, and `z` are integer grid coordinates
+- `rotated` is a boolean flag indicating whether the object is rotated relative to its default orientation
+
+**SorterAction**
+
+- `segment: Dict[str, PositionTuple]`
+  mapping from object name to predicted position for the segmentation task
+- `adjust: Tuple[str, int] | ()`
+  a tuple of `(object_name, option_index)` selecting one legal move from `adjust_action_options`
+- `place: Dict[str, PositionTuple]`
+  mapping from object name to its proposed final position in the full-layout placement task
+
+In practice, one action payload should target the active task and leave the other fields empty.
+
+**SorterObservation**
+
+- `grid_dims: Tuple[int, int, int]`
+  dimensions of the 3D grid
+- `weighted_grid: NDArray`
+  scoring grid that defines which placements are better or worse
+- `current_grid: NDArray`
+  current occupancy grid of the environment
+- `objects_present: Dict[str, PositionTuple]`
+  internal object placements when that information is intentionally exposed to the active task
+- `reward: float`
+  latest scalar reward returned by the most recent action
+- `reward_details: Tuple[List[float], List[str]]`
+  full reward log as parallel numeric and textual histories
+- `advisory: List[str]`
+  additional feedback, including optimizer guidance for placement
+- `done: bool`
+  whether the current episode has terminated
+
+**Task-specific observation fields**
+
+- `positions_segment: Dict[str, PositionTuple]`
+  segment-relevant object positions exposed for identification
+- `positions: List[PositionTuple]`
+  raw candidate positions shown during segmentation
+- `observed_objects: List[Dict[str, Any]]`
+  task-visible object descriptors for segmentation
+- `last_segment_attempt: Dict[str, PositionTuple]`
+  most recent segmentation submission
+- `positions_adjust: Dict[str, PositionTuple]`
+  currently exposed positions for the adjustment task
+- `adjustable_objects: List[Dict[str, Any]]`
+  objects currently eligible for adjustment
+- `adjust_focus_object: str`
+  object currently locked for multi-step adjustment
+- `adjust_start_position: PositionTuple | ()`
+  original position of the current adjustment target
+- `adjust_visited_positions: List[Tuple[int, int, int]]`
+  legal coordinates already visited in the current adjustment episode
+- `adjust_action_options: List[List[Any]]`
+  currently available legal move options for the selected object
+- `positions_place: Dict[str, PositionTuple]`
+  full object placement map exposed during the placement task
+
+**SorterState**
+
+`SorterState` largely mirrors `SorterObservation`, but stores the reward log as `reward: Tuple[List[float], List[str]]` rather than a single latest scalar reward. This is the internal environment state used between steps.
             
-### Demonstration
+## Demonstration
 To view the demonstation of how this environment is supposed to work clone this repository and run the `inference.py`. Set the following environment variables in a `.env` file:
 - API_BASE_URL
 - MODEL_NAME
 - API_KEY
 
-### Project Structure
+## Project Structure
 
 ```
 sorter/
 ├── config/                  # Basic configurations
 │   ├── grid.py
 │   └── objects.py
+│
+├── model_types/             # Task-specific mixins and shared type fragments
+│   ├── __init__.py
+│   ├── adjust_model.py
+│   ├── place_model.py
+│   └── segment_model.py
 │
 ├── models/                  # Task based models (action, observation, state)
 │   ├── __init__.py
