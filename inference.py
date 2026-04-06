@@ -100,11 +100,11 @@ def _empty_action_payload_dict() -> Dict[str, Any]:
 
 
 def current_reward_events(observation: SorterObservation) -> List[float]:
-    return list(observation.reward[0]) if observation.reward else []
+    return list(observation.reward_details[0]) if observation.reward_details else []
 
 
 def current_feedback_events(observation: SorterObservation) -> List[str]:
-    return list(observation.reward[1]) if observation.reward else []
+    return list(observation.reward_details[1]) if observation.reward_details else []
 
 
 def latest_advisory(observation: SorterObservation) -> str:

@@ -53,14 +53,9 @@ app = create_app(
 )
 
 
-def main(host: str = "0.0.0.0", port: int = 8000):
+def run_server(host: str = "0.0.0.0", port: int = 8000):
     """
-    Entry point for direct execution via uv run or python -m.
-
-    This function enables running the server without Docker:
-        uv run --project . server
-        uv run --project . server --port 8001
-        python -m sorter.server.app
+    Start the FastAPI server with the provided host and port.
 
     Args:
         host: Host address to bind to (default: "0.0.0.0")
@@ -75,10 +70,23 @@ def main(host: str = "0.0.0.0", port: int = 8000):
     uvicorn.run(app, host=host, port=port)
 
 
-if __name__ == "__main__":
+def main():
+    """
+    Entry point for direct execution via uv run or python -m.
+
+    This function enables running the server without Docker:
+        uv run --project . server
+        uv run --project . server --port 8001
+        python -m sorter.server.app
+    """
     import argparse
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--host", default="0.0.0.0")
     args = parser.parse_args()
-    main(port=args.port)
+    run_server(host=args.host, port=args.port)
+
+
+if __name__ == '__main__':
+    main()

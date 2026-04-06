@@ -77,7 +77,9 @@ def _coerce_state(state: SorterState | SorterObservation | Mapping[str, Any]):
     if isinstance(state, SorterState):
         return state.model_copy(deep=True)
     if isinstance(state, SorterObservation):
-        return SorterState(**state.model_dump())
+        payload = state.model_dump()
+        payload["reward"] = payload.pop("reward_details", ([], []))
+        return SorterState(**payload)
     if isinstance(state, Mapping):
         return SorterState(**dict(state))
     raise TypeError("state must be a SorterState, SorterObservation, or mapping.")

@@ -35,6 +35,11 @@ class SorterEnvironment(Environment):
     DEFAULT_TASK = "place"
     VALID_TASKS = {"segment", "place", "adjust"}
 
+    @staticmethod
+    def _latest_reward_value(state: SorterState) -> float:
+        reward_events = state.reward[0] if state.reward else []
+        return float(reward_events[-1]) if reward_events else 0.0
+
     def _segment_observed_objects(self, state: SorterState):
         observed_objects = []
         for obj_name, pos in sorted(
@@ -162,6 +167,8 @@ class SorterEnvironment(Environment):
         observation_kwargs = self._state_kwargs(state)
         observation_kwargs.pop("episode_id", None)
         observation_kwargs.pop("step_count", None)
+        observation_kwargs["reward_details"] = observation_kwargs.pop("reward")
+        observation_kwargs["reward"] = self._latest_reward_value(state)
         return SorterObservation(**observation_kwargs)
 
     def __init__(self, task: str | None = None):

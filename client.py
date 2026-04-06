@@ -17,7 +17,8 @@ class SorterEnv(EnvClient[SorterAction, SorterObservation, SorterState]):
             "grid_dims": payload.get("grid_dims"),
             "weighted_grid": payload.get("weighted_grid"),
             "current_grid": payload.get("current_grid"),
-            "reward": payload.get("reward", ([], [])),
+            "reward": payload.get("reward", 0.0),
+            "reward_details": payload.get("reward_details", ([], [])),
             "advisory": payload.get("advisory", []),
             "done": payload.get("done", False),
         }
