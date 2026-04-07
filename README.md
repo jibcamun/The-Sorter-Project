@@ -51,7 +51,7 @@ Importand Decisions substantiated by reasons:
 - We have designed our environment to simulate a warehouse or any space for that matter as a three dimensional grid, although not an entirely accurate representation, most companies like NVIDIA, Siemens, Dassault Systèmes, Microsoft and IBM use similiar or near same systems as recorded in [Warehouse Digital Twins](https://docs.nvidia.com/learning/physical-ai/assembling-digital-twins/latest/index.html) by NVIDIA and [Supply Chain 2.0](https://www.microsoft.com/en-us/industry/blog/manufacturing-and-mobility/2026/03/24/supply-chain-2-0-how-microsoft-is-powering-simulations-ai-agents-and-physical-ai/?msockid=2baed25235d468720632c43e34b669fd) by Microsoft. However these designs are mostly used by the massive coorporations for inventory management, automations and other related aspects of warehouse management, and we take inspiration from their logic to build something novel.
 - To achieve our goal we created two grid namely, the main grid called `current_grid` which contains a few objects randomly initialised to simulate objects present in the warehouse and `weighted_grid`, which is a duplicate of the main grid made in order to introduce noise and indicate the preference of placement.
 - Weighted grid is exposed because it defines what "better" means, but not the "optimal" positions of objects in the warehouse. This preserves the optimization problem while still making the reward landscape quite interpretable.
-- We intentionally expose only small, task-relevant slices of state, in order to provide better context for the model to perform each action, without exposing vital "ground truths" and destroying the reinforcement learning aspect of it.
+- We intentionally expose only small, task relevant slices of state, in order to provide better context for the model to perform each action, without exposing vital "ground truths" and destroying the reinforcement learning aspect of it.
 - The environment keeps `objects_present` as internal truth, but reveals it selectively depending on the task. It is revealed in `adjust` and `place` functions, in order to ensure that the ability of the tasks of functions to run independently is not compromised. 
 - We return the latest scalar reward together with textual feedback and advisory messages. This was a choice made to support both the reinforcement learning logic and help the LLM in iterative correction.
 - Validity constraints such as bounds, non-overlap, stackability, and support are enforced inside the environment instead of delegated to the agent. This keeps the task focused on decision quality and finding the best "optimal" position, rather than simulating low level frivolous tasks such as obstacle prevention, etc, which does not fit our pursuit.
@@ -213,7 +213,7 @@ The three tasks intentionally progress from local recognition to local optimizat
 
 ## Action Space
 
-The environment exposes a typed `SorterAction` Pydantic model composed of three task-specific action fields.
+The environment exposes a typed `SorterAction` Pydantic model composed of three task specific action fields.
 
 | Field | Type | Used in | Meaning |
 | --- | --- | --- | --- |
@@ -244,7 +244,7 @@ The environment exposes a typed `SorterObservation` Pydantic model. Some fields 
 | `advisory` | `List[str]` | All tasks | Guidance, including optimizer messages |
 | `done` | `bool` | All tasks | Whether the current episode is finished |
 
-### Task-Specific Observation Fields
+### Task Specific Observation Fields
 
 | Field | Type | Task | Meaning |
 | --- | --- | --- | --- |
@@ -265,7 +265,7 @@ The environment exposes a typed `SorterObservation` Pydantic model. Some fields 
 
 ### State Management
 
-- `reset()` creates a fresh random layout, clears reward history, clears task-specific caches, and starts a new episode
+- `reset()` creates a fresh random layout, clears reward history, clears task specific caches, and starts a new episode
 - `step(action)` applies the task specific transition and returns a typed `SorterObservation`
 - `state` returns the current typed internal state for inspection and grading
 
@@ -324,7 +324,7 @@ For a fixed state and action payload, grading is deterministic. The environment 
 
 ## Episode Boundaries
 
-Episode boundaries are task-dependent and are designed to be sensible for each workflow:
+Episode boundaries are task dependent and are designed to be sensible for each workflow:
 
 - `segment`: ends when all objects are labeled correctly
 - `adjust`: ends when no improving legal moves remain, no legal targets remain, or the task logic completes
@@ -353,7 +353,7 @@ Available endpoints:
 Typical interaction:
 
 1. call `POST /reset`
-2. inspect the task-relevant observation fields
+2. inspect the task relevant observation fields
 3. call `POST /step` with one `SorterAction`
 4. continue until `done=true`
 
@@ -470,11 +470,11 @@ sorter/
 
 ## Links
 
-Hugging Face repository: https://huggingface.co/spaces/Jibrann/sorter
+Hugging Face Repository: https://huggingface.co/spaces/Jibrann/sorter
 
 Hugging Face Space: https://jibrann-sorter.hf.space
 
-GitHub repository: https://github.com/jibcamun/The-Sorter-Project
+GitHub Repository: https://github.com/jibcamun/The-Sorter-Project
 
 ## Related Work
 
