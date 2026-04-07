@@ -19,7 +19,10 @@ def _is_segment_done(state: SorterState) -> bool:
     return (
         len(found) == len(target)
         and set(found.keys()) == set(target.keys())
-        and all(_normalize_position(found[obj]) == _normalize_position(target[obj]) for obj in target)
+        and all(
+            _normalize_position(found[obj]) == _normalize_position(target[obj])
+            for obj in target
+        )
     )
 
 
@@ -29,7 +32,9 @@ def segment(state: SorterState, objects_found: Dict[str, Tuple[int, int, int, bo
     previous_attempt = dict(getattr(state, "last_segment_attempt", {}))
     state.advisory = []
     state.last_segment_attempt = dict(objects_found)
-    invalid_task_keys = {"segment", "place", "adjust"}.intersection(objects_found.keys())
+    invalid_task_keys = {"segment", "place", "adjust"}.intersection(
+        objects_found.keys()
+    )
 
     if objects_found and objects_found == previous_attempt:
         state.advisory.append(

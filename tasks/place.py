@@ -137,7 +137,9 @@ def _optimal_placements(state: SorterState):
     return optimal, status
 
 
-def _wrong_objects_feedback(agent_positions: Dict[str, tuple], optimal_positions: Dict[str, tuple]) -> str:
+def _wrong_objects_feedback(
+    agent_positions: Dict[str, tuple], optimal_positions: Dict[str, tuple]
+) -> str:
     wrong_objects = sorted(
         obj_name
         for obj_name, optimal_pos in optimal_positions.items()
@@ -268,7 +270,9 @@ def place(state: SorterState, placements: Dict[str, Tuple[int, int, int, bool]])
         compute_reward(state, -reward_per_obj, error_message)
         return
 
-    delta_score = _placement_reward_delta(wt_grid, previous_positions, proposed_positions)
+    delta_score = _placement_reward_delta(
+        wt_grid, previous_positions, proposed_positions
+    )
     reward = max(-50.0, min(delta_score * reward_per_obj, 50.0))
     compute_reward(
         state,
@@ -285,7 +289,9 @@ def place(state: SorterState, placements: Dict[str, Tuple[int, int, int, bool]])
         return
 
     if optimal_status == cp_model.OPTIMAL:
-        achieved_score = _total_placement_score(state.weighted_grid, state.positions_place)
+        achieved_score = _total_placement_score(
+            state.weighted_grid, state.positions_place
+        )
         optimal_score = _total_placement_score(state.weighted_grid, optimal_positions)
         tolerance = len(state.objects_present) / OBJECTIVE_SCALE
         state.advisory.append(

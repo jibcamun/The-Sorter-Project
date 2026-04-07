@@ -85,7 +85,9 @@ def _legal_adjustment_error(
     init_pos = state.objects_present[obj_name]
     dims = tuple(OBJECTS[obj_name]["dims"])
 
-    is_adjustable, adjust_msg = _is_adjustable(state.current_grid, obj_name, init_pos[:3])
+    is_adjustable, adjust_msg = _is_adjustable(
+        state.current_grid, obj_name, init_pos[:3]
+    )
     if not is_adjustable:
         return adjust_msg
     if not _in_bounds(state.current_grid, dims, new_pos):
@@ -207,9 +209,7 @@ def _adjustment_reward(
     return max(-reward_per_obj, min(reward, reward_per_obj))
 
 
-def _adjustment_feedback(
-    obj_name: str, current_score: float, new_score: float
-) -> str:
+def _adjustment_feedback(obj_name: str, current_score: float, new_score: float) -> str:
     if new_score < current_score:
         return f"adjust: Object '{obj_name}' moved legally to a worse target position."
     if new_score == current_score:

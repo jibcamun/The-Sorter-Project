@@ -129,9 +129,7 @@ def _fallback_action(task: TaskName, action: Any) -> ParsedAction:
     return ParsedAction(segment=segment, place=place, adjust=adjust)
 
 
-def _step_max_reward(
-    task: TaskName, state: SorterState, action: ParsedAction
-) -> float:
+def _step_max_reward(task: TaskName, state: SorterState, action: ParsedAction) -> float:
     if task == "segment":
         return TASK_MAX_SCORES["segment"]
 
@@ -193,14 +191,18 @@ def _adjust_progress_fraction(state: SorterState) -> float:
         return 0.0
 
     current_pos = state.objects_present[focus_object][:3]
-    start_pos = getattr(state, "adjust_start_position", ()) or state.objects_present[
-        focus_object
-    ]
+    start_pos = (
+        getattr(state, "adjust_start_position", ())
+        or state.objects_present[focus_object]
+    )
     initial_score = _position_score(state, focus_object, start_pos[:3])
     current_score = _position_score(state, focus_object, current_pos)
     legal_positions = _legal_adjustment_positions(state, focus_object)
     best_reachable_score = max(
-        [current_score, *(_position_score(state, focus_object, pos) for pos in legal_positions)]
+        [
+            current_score,
+            *(_position_score(state, focus_object, pos) for pos in legal_positions),
+        ]
     )
 
     achievable_improvement = best_reachable_score - initial_score
@@ -295,7 +297,9 @@ def grade_adjust(
     graded_state = _coerce_state(state)
     _validate_state_for_task("adjust", graded_state)
     try:
-        action_input = {"adjust": action} if isinstance(action, (list, tuple)) else action
+        action_input = (
+            {"adjust": action} if isinstance(action, (list, tuple)) else action
+        )
         parsed_action = _coerce_action(action_input)
         run_adjust(graded_state, parsed_action.adjust)
     except (KeyError, TypeError, ValueError) as exc:

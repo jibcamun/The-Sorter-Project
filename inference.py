@@ -353,7 +353,9 @@ def _constrain_adjust_action(
 def _get_internal_state(env: SorterEnvironment) -> SorterState:
     state = getattr(env, "_state", None)
     if state is None:
-        raise RuntimeError("SorterEnvironment does not expose internal state for grading.")
+        raise RuntimeError(
+            "SorterEnvironment does not expose internal state for grading."
+        )
     return state
 
 
@@ -458,7 +460,9 @@ def main():
             done = final_grade.done
 
             error = parse_error
-            if error is None and feedback.lower().startswith(f"{TASK_NAME} grading failed:"):
+            if error is None and feedback.lower().startswith(
+                f"{TASK_NAME} grading failed:"
+            ):
                 error = feedback
 
             rewards.append(reward)
