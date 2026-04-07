@@ -84,6 +84,8 @@ What the agent sees:
 - grid dimensions
 - reward and advisory history
 
+These above details are exposed considering the fact that these are the basic details recorded by warehouses and factories in the present as a part of their inventory management.
+
 What the agent must return:
 
 ```json
@@ -101,8 +103,8 @@ Done condition:
 
 Grader rule:
 
-- exact-match mapping from object name to position
-- score normalized into `0.0-1.0`
+- exact match mapping from object name to position
+- score normalized into `0.0` to `1.0`
 
 Reward behavior:
 
@@ -115,9 +117,9 @@ Objective: improve the location of one movable object using the legal candidate 
 
 Why it is medium:
 
-- the agent must choose among legal but not necessarily optimal moves
+- the agent must choose among legal moves
 - the focus locks onto one object after the first valid move
-- reward is based on improvement, not just validity
+- reward is based on improvement, not just validity of the position at which object is placed
 
 What the agent sees:
 
@@ -144,12 +146,12 @@ Grader rule:
 
 - validates that the selected `(object_name, option_index)` is legal for the current state
 - grades by realized improvement versus achievable improvement
-- returns normalized score in `0.0-1.0`
+- returns normalized score in `0.0` to `1.0`
 
 Reward behavior:
 
 - positive reward for better legal moves
-- zero for legal but non-improving moves
+- zero for legal but not improving moves
 - negative reward for worsening or invalid moves
 
 ### Task 3: `place` (Hard)
@@ -190,7 +192,7 @@ Grader rule:
 
 - validates completeness and physical legality of the full layout
 - compares achieved layout quality against the current state
-- returns normalized score in `0.0-1.0`
+- returns normalized score in `0.0` to `1.0`
 
 Reward behavior:
 
@@ -215,7 +217,7 @@ The environment exposes a typed `SorterAction` Pydantic model composed of three 
 
 | Field | Type | Used in | Meaning |
 | --- | --- | --- | --- |
-| `segment` | `Dict[str, PositionTuple]` | `segment` | Predicted object-name to position mapping |
+| `segment` | `Dict[str, PositionTuple]` | `segment` | Predicted object name to position mapping |
 | `adjust` | `Tuple[str, int]` or empty tuple | `adjust` | Choose one legal move by object name and exposed option index |
 | `place` | `Dict[str, PositionTuple]` | `place` | Proposed full layout for every object |
 
@@ -264,12 +266,12 @@ The environment exposes a typed `SorterObservation` Pydantic model. Some fields 
 ### State Management
 
 - `reset()` creates a fresh random layout, clears reward history, clears task-specific caches, and starts a new episode
-- `step(action)` applies the task-specific transition and returns a typed `SorterObservation`
+- `step(action)` applies the task specific transition and returns a typed `SorterObservation`
 - `state` returns the current typed internal state for inspection and grading
 
 ### Why `weighted_grid` Is Exposed
 
-`weighted_grid` reveals what the environment prefers without exposing the optimizer answer. This gives agents useful reward-shaping context while preserving the optimization problem.
+`weighted_grid` reveals what the environment prefers without exposing the optimizer answer. This gives agents useful reward shaping context while preserving the optimization problem.
 
 ### Why `adjust` Uses Option Indices
 
@@ -411,16 +413,7 @@ docker run --rm -p 8000:8000 sorter
 
 The baseline script is `inference.py` in the project root, as required by the submission rules. It emits structured stdout in the required `[START]`, `[STEP]`, and `[END]` format and uses the OpenAI client for model calls.
 
-Because baseline scores depend on the configured `API_BASE_URL`, `MODEL_NAME`, and credentials, record the measured values from your current run before submission.
-
-Suggested reporting table:
-
-| Task | Model | Score | Steps | Notes |
-| --- | --- | --- | --- | --- |
-| `segment` | `MODEL_NAME` | `TBD` | `TBD` | Populate from `[END]` |
-| `adjust` | `MODEL_NAME` | `TBD` | `TBD` | Populate from `[END]` |
-| `place` | `MODEL_NAME` | `TBD` | `TBD` | Populate from `[END]` |
-| `overall` | `MODEL_NAME` | `TBD` | `TBD` | Average or aggregated score |
+Baseline scores depend on the configured `API_BASE_URL`, `MODEL_NAME`, and credentials.
 
 ## Project Structure
 
