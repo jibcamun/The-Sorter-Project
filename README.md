@@ -13,23 +13,31 @@ app_port: 8000
 
 # The Sorter Project
 
-`sorter` is an OpenEnv environment for warehouse slotting and re-slotting. It models three tasks that human warehouse operators and inventory planners actually perform:
+## The Purpose
+We came up with this idea, keeping in mind its application in factories, warehouses and storage facilities. _(and even your coffee table!)_
+
+`sorter` is an OpenEnv environment for warehouse slotting and reslotting, in both macro and micro slotting aspects. It models three tasks that human warehouse operators and inventory planners actually perform, with an aim to possibly automate the process:
 
 1. identify incoming items from known inventory metadata
 2. reposition one item to a better legal slot
 3. reorganize an entire layout to improve storage quality
 
-The environment is designed for agent evaluation rather than low-level robotics. Collision checks, support constraints, bounds, and stackability are enforced by the environment, while the agent is evaluated on recognition, layout decisions, and improvement over time.
+The environment is designed for agent evaluation rather than low level robotics. Collision checks, support constraints, bounds, and stackability are enforced by the environment, while the agent is evaluated on recognition, layout decisions, and improvement over time.
 
-## Why This Is A Real-World Task
+## Our Say
+### **The Industrial Perspective / Micro Perspective**
+- Companies spend milllions if not billions on establishing, maintaining and organisising warehouses and storage facilities, and in a densely populated country like India with increasing demand for land and with the surging property prices efficient storage and orgsation becomes the ***need of the hour***, leading to the demand for an environment or an agent that can help companies and organisations and provide them with ways for the maximum efficient and logical storage of their "objects".
+- The environments and agents that specialise in full fledged identifying, sorting, stacking and organising of objects or warehouse material are few in number, and ***we are here to fill that gap***.
 
-This environment maps to common operations in warehouses, storage rooms, micro-fulfillment centers, and factory floor inventory areas:
+### **The Populational Perspective / Macro Persepective**
+With increase in population causing decrease of 'Open Spaces' it becomes extremely important to **build societies and localities that can cater to a huge chunk of population** and in such a case, The Sorter Project though being mainly built for industrial application, becomes an extremely useful tool that allows proper space utilisation to accomatodate more people whilst taking minimum space. _(so in the near future we might not have to shift to mars)_
 
-- `segment`: match observed object geometry to known SKU metadata during inbound triage
+## Why This Is A Real World Task
+This environment maps to common operations in warehouses, storage rooms, micro fulfillment centers (similiar to the ones used by Zepto, Blinkit, etc), and factory floor inventory areas:
+
+- `segment`: match observed object positions to known SKU metadata
 - `adjust`: move a single misplaced or newly arrived item to a better slot
-- `place`: perform full re-slotting when utilization changes or the area must be reorganized
-
-The environment is intentionally framed as warehouse slotting instead of a toy rearrangement puzzle. A human planner would recognize the task immediately: identify what is in the aisle, decide where one object should move next, or propose a better global arrangement under physical constraints.
+- `place`: perform full reslotting when utilization changes or the area must be reorganized
 
 ## Environment Summary
 
@@ -39,6 +47,15 @@ The world state is a 3D grid:
 - `weighted_grid`: a dense preference field that defines which placements are more valuable
 - `objects_present`: ground-truth object placements, exposed selectively by task
 
+Importand Decisions substantiated by reasons:
+- We have designed our environment to simulate a warehouse or any space for that matter as a three dimensional grid, although not an entirely accurate representation, most companies like NVIDIA, Siemens, Dassault Systèmes, Microsoft and IBM use similiar or near same systems as recorded in [Warehouse Digital Twins](https://docs.nvidia.com/learning/physical-ai/assembling-digital-twins/latest/index.html) by NVIDIA and [Supply Chain 2.0](https://www.microsoft.com/en-us/industry/blog/manufacturing-and-mobility/2026/03/24/supply-chain-2-0-how-microsoft-is-powering-simulations-ai-agents-and-physical-ai/?msockid=2baed25235d468720632c43e34b669fd) by Microsoft. However these designs are mostly used by the massive coorporations for inventory management, automations and other related aspects of warehouse management, and we take inspiration from their logic to build something novel.
+- To achieve our goal we created two grid namely, the main grid called `current_grid` which contains a few objects randomly initialised to simulate objects present in the warehouse and `weighted_grid`, which is a duplicate of the main grid made in order to introduce noise and indicate the preference of placement.
+- Weighted grid is exposed because it defines what "better" means, but not the "optimal" positions of objects in the warehouse. This preserves the optimization problem while still making the reward landscape quite interpretable.
+- We intentionally expose only small, task-relevant slices of state, in order to provide better context for the model to perform each action, without exposing vital "ground truths" and destroying the reinforcement learning aspect of it.
+- The environment keeps `objects_present` as internal truth, but reveals it selectively depending on the task. It is revealed in `adjust` and `place` functions, in order to ensure that the ability of the tasks of functions to run independently is not compromised. 
+- We return the latest scalar reward together with textual feedback and advisory messages. This was a choice made to support both the reinforcement learning logic and help the LLM in iterative correction.
+- Validity constraints such as bounds, non-overlap, stackability, and support are enforced inside the environment instead of delegated to the agent. This keeps the task focused on decision quality and finding the best "optimal" position, rather than simulating low level frivolous tasks such as obstacle prevention, etc, which does not fit our pursuit.
+
 The reward is shaped across the whole trajectory:
 
 - partial credit for correct segmentation
@@ -47,6 +64,8 @@ The reward is shaped across the whole trajectory:
 - penalties for malformed, illegal, destructive, or clearly unhelpful actions
 
 ## Tasks
+_We have developed this environment with 'ease' thanks to OpenEnv!_ <br>
+Our Sorter Project consists of ***_3_ different parts or tasks***:
 
 ### Task 1: `segment` (Easy)
 
@@ -178,6 +197,8 @@ Reward behavior:
 - positive reward for improving total layout score
 - negative reward for incomplete, overlapping, unsupported, or out-of-bounds layouts
 
+**NOTE**: In a real life scenario, idealy all tasks would be done sequentially, in a chronological order for the agent to function independently without any external context on the objects present, allowing it to function on its own volition and giving it full freedom.
+
 ## Difficulty Progression
 
 The three tasks intentionally progress from local recognition to local optimization to global optimization:
@@ -275,7 +296,6 @@ Reward =
 $$
 
 Where:
-
 - `N` is the number of objects in the episode
 - `score(obj, pos)` is the mean `weighted_grid` value covered by the object at that position
 - `L(layout)` is the total layout score across all objects
@@ -343,24 +363,16 @@ The baseline and submission flow use the following variables:
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `OPENAI_API_KEY` | Yes for inference | API key consumed by the OpenAI client |
-| `API_BASE_URL` | Yes for submission | Base URL for the LLM provider endpoint |
-| `MODEL_NAME` | Yes for submission | Model identifier used by the baseline |
-| `HF_TOKEN` | Yes for submission config | Hugging Face token for Space or submission workflows |
-
-Notes:
-
-- `inference.py` uses the OpenAI client and now prefers `OPENAI_API_KEY`
-- `HF_TOKEN` is included because the submission instructions require it in environment configuration
-- `API_KEY` is still accepted as a backward-compatible fallback, but `OPENAI_API_KEY` is the intended variable
+| `API_KEY` or `HF_TOKEN` or `OPENAI_API_KEY` | Yes | API key consumed by the OpenAI client |
+| `API_BASE_URL` | Yes | Base URL for the LLM provider endpoint |
+| `MODEL_NAME` | Yes | Model identifier used by the baseline |
 
 Example `.env`:
 
 ```bash
-OPENAI_API_KEY=your-provider-key
+API_KEY=your-api-key
 API_BASE_URL=https://integrate.api.nvidia.com/v1
 MODEL_NAME=openai/gpt-oss-120b
-HF_TOKEN=your-hugging-face-token
 ```
 
 ### Local Installation
@@ -379,26 +391,6 @@ uv run --project . server --host 0.0.0.0 --port 8000
 
 ```bash
 python inference.py
-```
-
-To run one task only:
-
-```bash
-THE_SORTER_PROJECT_TASK=segment python inference.py
-THE_SORTER_PROJECT_TASK=adjust python inference.py
-THE_SORTER_PROJECT_TASK=place python inference.py
-```
-
-### Validate OpenEnv Compliance
-
-```bash
-openenv validate
-```
-
-### Validate The Submission End To End
-
-```bash
-bash validate-submission.sh https://your-space.hf.space .
 ```
 
 ### Docker
@@ -430,7 +422,27 @@ Suggested reporting table:
 | `place` | `MODEL_NAME` | `TBD` | `TBD` | Populate from `[END]` |
 | `overall` | `MODEL_NAME` | `TBD` | `TBD` | Average or aggregated score |
 
+## Project Structure
+
+```text
+sorter/
+├── config/                  # Grid and object Configuration
+├── model_types/             # Task Specific Types
+├── models/                  # Typed action, observation, and state models
+├── server/                  # FastAPI app and OpenEnv environment
+├── tasks/                   # Segment, adjust, and place task logic
+├── utils/                   # Grid and reward helpers
+├── client.py                # Client utilities
+├── graders.py               # Deterministic task graders
+├── inference.py             # Baseline agent
+├── openenv.yaml             # OpenEnv metadata
+├── Dockerfile               # Container build configuration
+├── validate-submission.sh   # Validation script
+└── README.md
+```
+
 ## Example Payloads
+**NOTE**: `config/objects.py` file has actual list of objects, modify that or try using one of the predefined objects to try out the live server. Objects listed below are mere examples.
 
 ### Example `segment` Action
 
@@ -461,72 +473,6 @@ Suggested reporting table:
     "box": [4, 0, 0, false]
   }
 }
-```
-
-### Example `segment` Observation Slice
-
-```json
-{
-  "grid_dims": [8, 8, 4],
-  "positions": [[0, 0, 0, false], [2, 1, 0, true]],
-  "observed_objects": [
-    {
-      "position": [0, 0, 0, false],
-      "dims": [1, 2, 1],
-      "stackable": false,
-      "volume": 2
-    }
-  ],
-  "reward": 0.0,
-  "done": false
-}
-```
-
-### Example `adjust` Observation Slice
-
-```json
-{
-  "objects_present": {
-    "book": [0, 0, 0, false]
-  },
-  "adjust_focus_object": "",
-  "adjust_action_options": [["book", 0], ["book", 1]],
-  "reward": 0.0,
-  "done": false
-}
-```
-
-### Example `place` Observation Slice
-
-```json
-{
-  "objects_present": {
-    "book": [0, 0, 0, false],
-    "bottle": [2, 1, 0, true]
-  },
-  "positions_place": {},
-  "reward": 0.0,
-  "done": false
-}
-```
-
-## Project Structure
-
-```text
-sorter/
-|-- config/                  # Grid and object configuration
-|-- model_types/             # Task-specific type fragments
-|-- models/                  # Typed action, observation, and state models
-|-- server/                  # FastAPI app and OpenEnv environment wrapper
-|-- tasks/                   # segment, adjust, place task logic
-|-- utils/                   # Grid and reward helpers
-|-- client.py                # Client utilities
-|-- graders.py               # Deterministic task graders
-|-- inference.py             # Baseline agent runner
-|-- openenv.yaml             # OpenEnv metadata
-|-- Dockerfile               # Container build
-|-- validate-submission.sh   # Pre-submission validation helper
-`-- README.md
 ```
 
 ## Links
