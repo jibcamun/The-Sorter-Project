@@ -291,6 +291,6 @@ sorter/
 ****Github Link**** (this page): https://github.com/jibcamun/The-Sorter-Project
 
 ## Related Works
-[Jumanji](https://github.com/instadeepai/jumanji)<br>
-[miniRL](https://proxyapps.exascaleproject.org/app/minirl/)<br>
-[BabyAI](https://arxiv.org/abs/1810.08272)<br>
+[Jumanji](https://github.com/instadeepai/jumanji): An RL environment suite for structured decision-making and optimization tasks.<br>
+[miniRL](https://proxyapps.exascaleproject.org/app/minirl/): A lightweight RL framework focused on simple environment design and experimentation.<br>
+[BabyAI](https://arxiv.org/abs/1810.08272): A grid-world benchmark for learning complex behavior from simpler sub-tasks.<br>
