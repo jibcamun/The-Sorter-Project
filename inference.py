@@ -19,7 +19,7 @@ except ImportError:
 
 load_dotenv()
 
-API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
+API_KEY = os.getenv("API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("HF_TOKEN")
 
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://integrate.api.nvidia.com/v1"
 MODEL_NAME = os.getenv("MODEL_NAME") or "openai/gpt-oss-120b"
@@ -59,6 +59,7 @@ TASK_OBSERVATION_FIELDS = {
         "done",
     },
 }
+
 
 def build_system_prompt(task_name: str) -> str:
     return textwrap.dedent(
@@ -292,7 +293,9 @@ def _extract_json_payload(output_str: str) -> str:
     return output_str[start : end + 1]
 
 
-def _normalize_action_payload(task_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_action_payload(
+    task_name: str, payload: Dict[str, Any]
+) -> Dict[str, Any]:
     action_field = TASK_ACTION_FIELDS[task_name]
     action_value = payload.get(action_field, payload)
     normalized_payload = _empty_action_payload_dict()
