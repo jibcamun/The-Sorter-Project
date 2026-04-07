@@ -30,6 +30,7 @@ def segment(state: SorterState, objects_found: Dict[str, Tuple[int, int, int, bo
     obj_loc_mapper = state.objects_present
     reward_per_object_placed = 20.0 / len(obj_loc_mapper)
     previous_attempt = dict(getattr(state, "last_segment_attempt", {}))
+    confirmed_labels = dict(getattr(state, "positions_segment", {}))
     state.advisory = []
     state.last_segment_attempt = dict(objects_found)
     invalid_task_keys = {"segment", "place", "adjust"}.intersection(
@@ -81,22 +82,47 @@ def segment(state: SorterState, objects_found: Dict[str, Tuple[int, int, int, bo
 
         normalized_found_position = _normalize_position(object_found)
         normalized_expected_position = _normalize_position(expected_position)
+        already_confirmed = (
+            confirmed_labels.get(object_name) == normalized_expected_position
+        )
 
         if normalized_found_position == normalized_expected_position:
-            compute_reward(
-                state,
-                reward_per_object_placed,
-                f"the right object, '{object_name}' was found at correct position",
-            )
             state.positions_segment[object_name] = normalized_found_position
-            correct_labels.append(object_name)
+            if already_confirmed:
+                compute_reward(
+                    state,
+                    0.0,
+                    (
+                        f"segment: '{object_name}' was already confirmed at the correct "
+                        "position in a previous step."
+                    ),
+                )
+                correct_labels.append(object_name)
+            else:
+                compute_reward(
+                    state,
+                    reward_per_object_placed,
+                    f"the right object, '{object_name}' was found at correct position",
+                )
+                correct_labels.append(object_name)
         else:
-            compute_reward(
-                state,
-                -reward_per_object_placed,
-                f"The object, '{object_name}' was assigned the wrong position: '{object_found}'",
-            )
-            incorrect_labels.append(object_name)
+            if already_confirmed:
+                compute_reward(
+                    state,
+                    0.0,
+                    (
+                        f"segment: '{object_name}' remains confirmed from a previous step; "
+                        f"ignoring new incorrect position '{object_found}'."
+                    ),
+                )
+                correct_labels.append(object_name)
+            else:
+                compute_reward(
+                    state,
+                    -reward_per_object_placed,
+                    f"The object, '{object_name}' was assigned the wrong position: '{object_found}'",
+                )
+                incorrect_labels.append(object_name)
 
     remaining_labels = sorted(
         obj_name for obj_name in obj_loc_mapper.keys() if obj_name not in correct_labels

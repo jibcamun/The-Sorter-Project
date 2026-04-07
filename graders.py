@@ -212,6 +212,20 @@ def _adjust_progress_fraction(state: SorterState) -> float:
     return max(0.0, min(achieved_improvement / achievable_improvement, 1.0))
 
 
+def _segment_completion_fraction(state: SorterState) -> float:
+    total_objects = len(state.objects_present)
+    if total_objects <= 0:
+        return 0.0
+
+    confirmed_positions = getattr(state, "positions_segment", {}) or {}
+    correct_count = 0
+    for object_name, expected_position in state.objects_present.items():
+        if confirmed_positions.get(object_name) == expected_position:
+            correct_count += 1
+
+    return max(0.0, min(correct_count / total_objects, 1.0))
+
+
 def grade_adjust_progress(state: SorterState | SorterObservation | Mapping[str, Any]):
     graded_state = _coerce_state(state)
     _validate_state_for_task("adjust", graded_state)
@@ -270,7 +284,11 @@ def grade_segment(
         return _record_failure(
             "segment", graded_state, fallback_action, f"segment grading failed: {exc}"
         )
-    return _result_from_state("segment", graded_state, parsed_action)
+    result = _result_from_state("segment", graded_state, parsed_action)
+    completion_fraction = _segment_completion_fraction(graded_state)
+    result.raw_score = result.max_score * completion_fraction
+    result.normalized_score = completion_fraction
+    return result
 
 
 def grade_place(
