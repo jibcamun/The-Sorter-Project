@@ -23,10 +23,12 @@ API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://integrate.api.nvidia.com/v1"
 MODEL_NAME = os.getenv("MODEL_NAME") or "openai/gpt-oss-120b"
-TASK_NAME = os.getenv("THE_SORTER_PROJECT_TASK", "place") or "place"
+TASK_NAME = os.getenv("THE_SORTER_PROJECT_TASK", "all") or "all"
 BENCHMARK = os.getenv("THE_SORTER_PROJECT_BENCHMARK", "the_sorter_project")
 MAX_STEPS = 8
 TEMPERATURE = 0.7
+VALID_TASK_SEQUENCE = ("segment", "adjust", "place")
+SEQUENCE_ALIASES = {"all", "full", "sequence"}
 
 TASK_ACTION_FIELDS = {
     "segment": "segment",
@@ -58,37 +60,38 @@ TASK_OBSERVATION_FIELDS = {
     },
 }
 
-SYSTEM_PROMPT = textwrap.dedent(
-    f"""
-    You are a professional logistician, facility expert and layout engineer.
-    Your current task is: {TASK_NAME}.
+def build_system_prompt(task_name: str) -> str:
+    return textwrap.dedent(
+        f"""
+        You are a professional logistician, facility expert and layout engineer.
+        Your current task is: {task_name}.
 
-    Task definitions:
-    a) segment: identify object names for the observed objects using only observable information. Each observed object includes its position, dimensions, stackability, and volume. Objects with identical observable signatures may be interchangeable for scoring, so focus on assigning labels consistently within each compatible group. Return exactly one flat mapping from object name to position under the segment key. Do not nest place or adjust inside segment.
-    b) place: place all objects into an empty grid efficiently while respecting stackability, always return the name and position of all the objects, both the objects modified and not modified, do not return an empty dictionary
-    c) adjust: return a single tuple of the form ["object_name", option_index]. The option_index selects one of the exposed legal target options for that object. Option indices are recomputed from the current state on every step, so do not count upward across steps. Pick the best current option based on the exposed target details, usually the option with the highest score_delta and often index 0.
+        Task definitions:
+        a) segment: identify object names for the observed objects using only observable information. Each observed object includes its position, dimensions, stackability, and volume. Objects with identical observable signatures may be interchangeable for scoring, so focus on assigning labels consistently within each compatible group. Return exactly one flat mapping from object name to position under the segment key. Do not nest place or adjust inside segment.
+        b) place: place all objects into an empty grid efficiently while respecting stackability, always return the name and position of all the objects, both the objects modified and not modified, do not return an empty dictionary
+        c) adjust: return a single tuple of the form ["object_name", option_index]. The option_index selects one of the exposed legal target options for that object. Option indices are recomputed from the current state on every step, so do not count upward across steps. Pick the best current option based on the exposed target details, usually the option with the highest score_delta and often index 0.
 
-    Active action schema for this task:
-    a) segment: {{"segment": {{"object_name": [x, y, z, stackable], ...}}}}
-    b) place: {{"place": {{"object_name": [x, y, z, stackable], ...}}}}
-    c) adjust: {{"adjust": ["object_name", option_index]}}
+        Active action schema for this task:
+        a) segment: {{"segment": {{"object_name": [x, y, z, stackable], ...}}}}
+        b) place: {{"place": {{"object_name": [x, y, z, stackable], ...}}}}
+        c) adjust: {{"adjust": ["object_name", option_index]}}
 
-    Return only the JSON object for the active task.
-    Do not include inactive task fields.
-    Do not include explanations, commentary, or extra keys.
-    If there is no valid move, return an empty object for segment/place.
-    For adjust, return {{"adjust": []}} when there are no exposed adjust_action_options.
-    For adjust, return exactly one tuple from adjust_action_options when options are available.
+        Return only the JSON object for the active task.
+        Do not include inactive task fields.
+        Do not include explanations, commentary, or extra keys.
+        If there is no valid move, return an empty object for segment/place.
+        For adjust, return {{"adjust": []}} when there are no exposed adjust_action_options.
+        For adjust, return exactly one tuple from adjust_action_options when options are available.
 
-    Additional context:
-    Objects and dimensions: {OBJECTS}
-    """
-).strip()
+        Additional context:
+        Objects and dimensions: {OBJECTS}
+        """
+    ).strip()
 
 
-def empty_action_json() -> str:
-    empty_value = [] if TASK_NAME == "adjust" else {}
-    return json.dumps({TASK_ACTION_FIELDS[TASK_NAME]: empty_value})
+def empty_action_json(task_name: str) -> str:
+    empty_value = [] if task_name == "adjust" else {}
+    return json.dumps({TASK_ACTION_FIELDS[task_name]: empty_value})
 
 
 def _empty_action_payload_dict() -> Dict[str, Any]:
@@ -136,6 +139,7 @@ def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> No
 
 
 def build_user_prompt(
+    task_name: str,
     step: int,
     last_observation: SorterObservation,
     last_reward_total: float,
@@ -146,7 +150,7 @@ def build_user_prompt(
 ) -> str:
     history_block = "\n".join(history[-4:]) if history else "None"
     observation_payload = last_observation.model_dump()
-    allowed_fields = TASK_OBSERVATION_FIELDS[TASK_NAME]
+    allowed_fields = TASK_OBSERVATION_FIELDS[task_name]
     observation_payload = {
         key: value
         for key, value in observation_payload.items()
@@ -155,7 +159,7 @@ def build_user_prompt(
 
     valid_adjustments: Any = []
     adjust_action_options: Any = []
-    if TASK_NAME == "adjust":
+    if task_name == "adjust":
         valid_adjustments = observation_payload.get("adjustable_objects", [])
         adjust_action_options = observation_payload.get("adjust_action_options", [])
 
@@ -166,7 +170,7 @@ def build_user_prompt(
     )
     segment_guidance = ""
     adjust_guidance = ""
-    if TASK_NAME == "segment":
+    if task_name == "segment":
         segment_guidance = (
             "Segment guidance: assign one object label to each observed position using only observed_objects[].dims, stackable, and volume. "
             "Do not rely on hidden candidate label lists; infer from the object catalog and the observation only. "
@@ -174,7 +178,7 @@ def build_user_prompt(
             '{"segment":{"book":[x,y,z,true],"bottle":[x,y,z,false]}}'
             "Do not put a place key inside segment."
         )
-    if TASK_NAME == "adjust":
+    if task_name == "adjust":
         adjust_guidance = (
             "Adjust guidance: adjustable_objects contains per-object details, including legal_targets, but the action must come from Adjust action options. "
             "Choose one exact tuple from Adjust action options and return it unchanged as [object_name, option_index]. "
@@ -211,6 +215,7 @@ def _json_default(value: Any):
 
 def get_model_message(
     client: OpenAI,
+    task_name: str,
     step: int,
     last_observation: SorterObservation,
     last_reward_total: float,
@@ -220,6 +225,7 @@ def get_model_message(
     history: List[str],
 ) -> str:
     user_prompt = build_user_prompt(
+        task_name,
         step,
         last_observation,
         last_reward_total,
@@ -232,7 +238,7 @@ def get_model_message(
         completion = client.chat.completions.create(
             model=MODEL_NAME,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": build_system_prompt(task_name)},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=TEMPERATURE,
@@ -263,10 +269,10 @@ def get_model_message(
             text = "".join(text_parts).strip()
         else:
             text = ""
-        return text if text else empty_action_json()
+        return text if text else empty_action_json(task_name)
     except Exception as exc:
         print(f"[DEBUG] Model request failed: {exc}", flush=True)
-        return empty_action_json()
+        return empty_action_json(task_name)
 
 
 def _extract_json_payload(output_str: str) -> str:
@@ -286,12 +292,12 @@ def _extract_json_payload(output_str: str) -> str:
     return output_str[start : end + 1]
 
 
-def _normalize_action_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
-    action_field = TASK_ACTION_FIELDS[TASK_NAME]
+def _normalize_action_payload(task_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    action_field = TASK_ACTION_FIELDS[task_name]
     action_value = payload.get(action_field, payload)
     normalized_payload = _empty_action_payload_dict()
 
-    if TASK_NAME == "adjust":
+    if task_name == "adjust":
         if action_value is None:
             action_value = []
         if isinstance(action_value, dict):
@@ -323,17 +329,17 @@ def _normalize_action_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     return normalized_payload
 
 
-def parse_action(message: str) -> Dict[str, Any]:
+def parse_action(task_name: str, message: str) -> Dict[str, Any]:
     payload = json.loads(_extract_json_payload(message))
     if not isinstance(payload, dict):
         raise ValueError("Model output JSON must be an object at the top level.")
-    return _normalize_action_payload(payload)
+    return _normalize_action_payload(task_name, payload)
 
 
 def _constrain_adjust_action(
-    observation: SorterObservation, action: Dict[str, Any]
+    task_name: str, observation: SorterObservation, action: Dict[str, Any]
 ) -> Dict[str, Any]:
-    if TASK_NAME != "adjust":
+    if task_name != "adjust":
         return action
 
     valid_option_list = [
@@ -399,10 +405,53 @@ def apply_graded_step(
     return observation, graded_result
 
 
-def main():
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+def _resolve_requested_tasks(task_name: str) -> List[str]:
+    if task_name in VALID_TASK_SEQUENCE:
+        return [task_name]
+    if task_name in SEQUENCE_ALIASES:
+        return list(VALID_TASK_SEQUENCE)
+    raise ValueError(
+        f"Unsupported task '{task_name}'. Expected one of {list(VALID_TASK_SEQUENCE) + sorted(SEQUENCE_ALIASES)}."
+    )
 
-    env = SorterEnvironment(TASK_NAME)
+
+def _clone_state_for_task(source_state: SorterState) -> SorterState:
+    cloned_state = source_state.model_copy(deep=True)
+    cloned_state.step_count = 0
+    cloned_state.done = False
+    cloned_state.reward = ([], [])
+    cloned_state.advisory = []
+    cloned_state.positions_segment = {}
+    cloned_state.positions = []
+    cloned_state.observed_objects = []
+    cloned_state.last_segment_attempt = {}
+    cloned_state.positions_adjust = {}
+    cloned_state.adjustable_objects = []
+    cloned_state.adjust_focus_object = ""
+    cloned_state.adjust_start_position = ()
+    cloned_state.adjust_visited_positions = []
+    cloned_state.adjust_action_options = []
+    cloned_state.positions_place = {}
+    return cloned_state
+
+
+def _prepare_env(task_name: str, seeded_state: Optional[SorterState] = None):
+    env = SorterEnvironment(task_name)
+    if seeded_state is None:
+        initial_observation = env.reset()
+    else:
+        env.step_count = 0
+        env._state = _clone_state_for_task(seeded_state)
+        initial_observation = _build_observation(env, env._state)
+    return env, initial_observation
+
+
+def run_task_phase(
+    client: OpenAI,
+    task_name: str,
+    seeded_state: Optional[SorterState] = None,
+) -> Dict[str, Any]:
+    env, initial_observation = _prepare_env(task_name, seeded_state)
 
     history: List[str] = []
     rewards: List[float] = []
@@ -411,10 +460,10 @@ def main():
     success = False
     final_grade: Optional[GradeResult] = None
 
-    log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
+    log_start(task=task_name, env=BENCHMARK, model=MODEL_NAME)
 
     try:
-        result = env.reset()
+        result = initial_observation
         last_observation = result
         last_reward_events = current_reward_events(last_observation)
         last_reward_feedback_events = current_feedback_events(last_observation)
@@ -427,6 +476,7 @@ def main():
 
             message = get_model_message(
                 client,
+                task_name,
                 step,
                 last_observation,
                 last_reward_total,
@@ -438,17 +488,17 @@ def main():
 
             parse_error: Optional[str] = None
             try:
-                action = parse_action(message)
+                action = parse_action(task_name, message)
             except (JSONDecodeError, ValidationError, ValueError, TypeError) as exc:
                 print(f"[DEBUG] Action parse failed: {exc}", flush=True)
                 parse_error = str(exc)
-                action = json.loads(empty_action_json())
+                action = json.loads(empty_action_json(task_name))
 
-            action = _constrain_adjust_action(last_observation, action)
+            action = _constrain_adjust_action(task_name, last_observation, action)
 
             previous_rewards = list(_get_internal_state(env).reward[0])
             previous_feedback = list(_get_internal_state(env).reward[1])
-            result, final_grade = apply_graded_step(env, TASK_NAME, action)
+            result, final_grade = apply_graded_step(env, task_name, action)
             step_rewards, step_feedback = _step_reward_chunk(
                 previous_rewards, previous_feedback, final_grade
             )
@@ -461,7 +511,7 @@ def main():
 
             error = parse_error
             if error is None and feedback.lower().startswith(
-                f"{TASK_NAME} grading failed:"
+                f"{task_name} grading failed:"
             ):
                 error = feedback
 
@@ -489,7 +539,7 @@ def main():
                 break
 
         if (
-            TASK_NAME == "adjust"
+            task_name == "adjust"
             and final_grade is not None
             and not final_grade.done
             and steps_taken >= MAX_STEPS
@@ -499,16 +549,34 @@ def main():
         if final_grade is not None:
             score = final_grade.normalized_score
             success = final_grade.passed
-        else:
-            score = 0.0
-            success = False
 
+        return {
+            "task": task_name,
+            "success": success,
+            "steps": steps_taken,
+            "score": score,
+            "rewards": rewards,
+            "final_grade": final_grade,
+            "final_state": _get_internal_state(env).model_copy(deep=True),
+        }
     finally:
         try:
             env.close()
         except Exception as e:
             print(f"[DEBUG] env.close() error (container cleanup): {e}", flush=True)
         log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+
+
+def main():
+    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    requested_tasks = _resolve_requested_tasks(TASK_NAME)
+    seeded_state: Optional[SorterState] = None
+
+    for index, task_name in enumerate(requested_tasks):
+        phase_result = run_task_phase(client, task_name, seeded_state)
+        seeded_state = phase_result["final_state"]
+        if index < len(requested_tasks) - 1:
+            print("", flush=True)
 
 
 if __name__ == "__main__":
