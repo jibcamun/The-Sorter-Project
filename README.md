@@ -157,8 +157,6 @@ The environment is exposed through a FastAPI server defined in `server/app.py`. 
 - `POST /reset`: starts a fresh episode and returns the initial observation
 - `POST /step`: applies one `SorterAction` and returns the next observation
 - `GET /state`: returns the current internal environment state
-- `GET /schema`: returns the action and observation schemas exposed by the environment
-- `WS /ws`: opens a persistent session for interactive environment control
 
 **Typical interaction flow**
 
