@@ -244,7 +244,7 @@ def grade_adjust_progress(state: SorterState | SorterObservation | Mapping[str, 
     result = _result_from_state("adjust", graded_state, parsed_action)
     progress_fraction = _adjust_progress_fraction(graded_state)
     result.raw_score = result.max_score * progress_fraction
-    result.normalized_score = progress_fraction
+    result.normalized_score = _clamp_open_unit(progress_fraction)
     result.feedback = [
         *result.feedback,
         (
@@ -298,7 +298,7 @@ def grade_segment(
     result = _result_from_state("segment", graded_state, parsed_action)
     completion_fraction = _segment_completion_fraction(graded_state)
     result.raw_score = result.max_score * completion_fraction
-    result.normalized_score = completion_fraction
+    result.normalized_score = _clamp_open_unit(completion_fraction)
     return result
 
 
