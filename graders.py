@@ -43,9 +43,9 @@ def _normalize_reward_value(value: float, scale: float) -> float:
 class GradeResult:
     task: TaskName
     done: bool
-    raw_score: float
-    max_score: float
-    step_max_score: float
+    raw_points: float
+    max_points: float
+    step_max_points: float
     normalized_score: float
     latest_reward: float
     rewards: list[float]
@@ -60,6 +60,7 @@ class GradeResult:
         payload = asdict(self)
         payload["final_state"] = self.final_state.model_dump()
         payload["passed"] = self.passed
+        payload["score"] = payload["normalized_score"]
         return payload
 
 
@@ -175,19 +176,19 @@ def _episode_max_reward(task: TaskName, state: SorterState) -> float:
 def _result_from_state(task: TaskName, state: SorterState, action: ParsedAction):
     raw_rewards = list(state.reward[0])
     feedback = list(state.reward[1])
-    raw_score = float(sum(raw_rewards))
-    max_score = _episode_max_reward(task, state)
-    step_max_score = _step_max_reward(task, state, action)
-    normalized_score = _normalize_reward_value(raw_score, max_score)
-    rewards = [_normalize_reward_value(reward, max_score) for reward in raw_rewards]
+    raw_points = float(sum(raw_rewards))
+    max_points = _episode_max_reward(task, state)
+    step_max_points = _step_max_reward(task, state, action)
+    normalized_score = _normalize_reward_value(raw_points, max_points)
+    rewards = [_normalize_reward_value(reward, max_points) for reward in raw_rewards]
     latest_reward = rewards[-1] if rewards else 0.0
 
     return GradeResult(
         task=task,
         done=bool(state.done),
-        raw_score=raw_score,
-        max_score=max_score,
-        step_max_score=step_max_score,
+        raw_points=raw_points,
+        max_points=max_points,
+        step_max_points=step_max_points,
         normalized_score=normalized_score,
         latest_reward=latest_reward,
         rewards=rewards,
@@ -243,7 +244,7 @@ def grade_adjust_progress(state: SorterState | SorterObservation | Mapping[str, 
     parsed_action = ParsedAction(segment={}, place={}, adjust=())
     result = _result_from_state("adjust", graded_state, parsed_action)
     progress_fraction = _adjust_progress_fraction(graded_state)
-    result.raw_score = result.max_score * progress_fraction
+    result.raw_points = result.max_points * progress_fraction
     result.normalized_score = _clamp_open_unit(progress_fraction)
     result.feedback = [
         *result.feedback,
@@ -297,7 +298,7 @@ def grade_segment(
         )
     result = _result_from_state("segment", graded_state, parsed_action)
     completion_fraction = _segment_completion_fraction(graded_state)
-    result.raw_score = result.max_score * completion_fraction
+    result.raw_points = result.max_points * completion_fraction
     result.normalized_score = _clamp_open_unit(completion_fraction)
     return result
 
