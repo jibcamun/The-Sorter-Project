@@ -7,6 +7,7 @@ from openenv.core.env_server.types import State
 try:
     from models import SorterAction, SorterObservation, SorterState
     from config.objects import OBJECTS
+    from graders import TASK_MAX_SCORES
     from utils.grids import init_grid, weighted_grid
     from tasks.segment import segment
     from tasks.adjust import (
@@ -19,6 +20,7 @@ try:
 except ImportError:
     from ..models import SorterAction, SorterObservation, SorterState
     from ..config.objects import OBJECTS
+    from ..graders import TASK_MAX_SCORES
     from ..utils.grids import init_grid, weighted_grid
     from ..tasks.segment import segment
     from ..tasks.adjust import (
@@ -34,11 +36,38 @@ class SorterEnvironment(Environment):
     SUPPORTS_CONCURRENT_SESSIONS: bool = True
     DEFAULT_TASK = "place"
     VALID_TASKS = {"segment", "place", "adjust"}
+    UNIT_INTERVAL_EPSILON = 1e-6
 
-    @staticmethod
-    def _latest_reward_value(state: SorterState) -> float:
+    def _reward_scale(self, state: SorterState) -> float:
+        if self.task == "adjust" and getattr(state, "adjust_focus_object", ""):
+            total_objects = len(state.objects_present)
+            if total_objects > 0:
+                return TASK_MAX_SCORES["adjust"] / total_objects
+        return TASK_MAX_SCORES[self.task]
+
+    def _normalize_reward_value(self, state: SorterState, value: float) -> float:
+        scale = self._reward_scale(state)
+        if scale <= 0:
+            return self.UNIT_INTERVAL_EPSILON
+        return max(
+            self.UNIT_INTERVAL_EPSILON,
+            min(1.0 - self.UNIT_INTERVAL_EPSILON, float(value) / scale),
+        )
+
+    def _normalized_reward_details(self, state: SorterState):
+        reward_events, feedback = state.reward if state.reward else ([], [])
+        return (
+            [self._normalize_reward_value(state, reward) for reward in reward_events],
+            list(feedback),
+        )
+
+    def _latest_reward_value(self, state: SorterState) -> float:
         reward_events = state.reward[0] if state.reward else []
-        return float(reward_events[-1]) if reward_events else 0.0
+        return (
+            self._normalize_reward_value(state, reward_events[-1])
+            if reward_events
+            else 0.0
+        )
 
     def _segment_observed_objects(self, state: SorterState):
         observed_objects = []
@@ -167,7 +196,8 @@ class SorterEnvironment(Environment):
         observation_kwargs = self._state_kwargs(state)
         observation_kwargs.pop("episode_id", None)
         observation_kwargs.pop("step_count", None)
-        observation_kwargs["reward_details"] = observation_kwargs.pop("reward")
+        observation_kwargs["reward_details"] = self._normalized_reward_details(state)
+        observation_kwargs.pop("reward", None)
         observation_kwargs["reward"] = self._latest_reward_value(state)
         return SorterObservation(**observation_kwargs)
 

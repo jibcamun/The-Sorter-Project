@@ -59,6 +59,18 @@ TASK_OBSERVATION_FIELDS = {
         "done",
     },
 }
+UNIT_INTERVAL_EPSILON = 1e-6
+
+
+def _clamp_open_unit(value: float) -> float:
+    return max(UNIT_INTERVAL_EPSILON, min(1.0 - UNIT_INTERVAL_EPSILON, float(value)))
+
+
+def _format_open_unit(value: float, decimals: int = 6) -> str:
+    clamped = _clamp_open_unit(value)
+    scale = 10**decimals
+    truncated = int(clamped * scale) / scale
+    return f"{truncated:.{decimals}f}"
 
 
 def build_system_prompt(task_name: str) -> str:
@@ -126,15 +138,15 @@ def log_step(
     error_val = error if error else "null"
     done_val = str(done).lower()
     print(
-        f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}",
+        f"[STEP] step={step} action={action} reward={_format_open_unit(reward)} done={done_val} error={error_val}",
         flush=True,
     )
 
 
 def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
-    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    rewards_str = ",".join(_format_open_unit(r) for r in rewards)
     print(
-        f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}",
+        f"[END] success={str(success).lower()} steps={steps} score={_format_open_unit(score)} rewards={rewards_str}",
         flush=True,
     )
 
@@ -550,7 +562,7 @@ def run_task_phase(
             final_grade = grade_adjust_progress(_get_internal_state(env))
 
         if final_grade is not None:
-            score = final_grade.normalized_score
+            score = _clamp_open_unit(final_grade.normalized_score)
             success = final_grade.passed
 
         return {

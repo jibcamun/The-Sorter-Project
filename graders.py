@@ -26,6 +26,17 @@ TASK_MAX_SCORES: Dict[TaskName, float] = {
     "adjust": 30.0,
 }
 SUCCESS_SCORE_THRESHOLD = 0.1
+UNIT_INTERVAL_EPSILON = 1e-6
+
+
+def _clamp_open_unit(value: float) -> float:
+    return max(UNIT_INTERVAL_EPSILON, min(1.0 - UNIT_INTERVAL_EPSILON, float(value)))
+
+
+def _normalize_reward_value(value: float, scale: float) -> float:
+    if scale <= 0:
+        return UNIT_INTERVAL_EPSILON
+    return _clamp_open_unit(value / scale)
 
 
 @dataclass(slots=True)
@@ -162,13 +173,13 @@ def _episode_max_reward(task: TaskName, state: SorterState) -> float:
 
 
 def _result_from_state(task: TaskName, state: SorterState, action: ParsedAction):
-    rewards = list(state.reward[0])
+    raw_rewards = list(state.reward[0])
     feedback = list(state.reward[1])
-    raw_score = float(sum(rewards))
+    raw_score = float(sum(raw_rewards))
     max_score = _episode_max_reward(task, state)
     step_max_score = _step_max_reward(task, state, action)
-    normalized_score = raw_score / max_score if max_score > 0 else 0.0
-    normalized_score = max(0.0, min(1.0, normalized_score))
+    normalized_score = _normalize_reward_value(raw_score, max_score)
+    rewards = [_normalize_reward_value(reward, max_score) for reward in raw_rewards]
     latest_reward = rewards[-1] if rewards else 0.0
 
     return GradeResult(
