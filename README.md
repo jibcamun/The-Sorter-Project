@@ -104,7 +104,7 @@ Done condition:
 Grader rule:
 
 - exact match mapping from object name to position
-- score normalized into `0.0` to `1.0`
+- score normalized to be strictly between `0` and `1`
 
 Reward behavior:
 
@@ -146,7 +146,7 @@ Grader rule:
 
 - validates that the selected `(object_name, option_index)` is legal for the current state
 - grades by realized improvement versus achievable improvement
-- returns normalized score in `0.0` to `1.0`
+- returns a normalized score strictly between `0` and `1`
 
 Reward behavior:
 
@@ -192,7 +192,7 @@ Grader rule:
 
 - validates completeness and physical legality of the full layout
 - compares achieved layout quality against the current state
-- returns normalized score in `0.0` to `1.0`
+- returns a normalized score strictly between `0` and `1`
 
 Reward behavior:
 
@@ -312,7 +312,7 @@ The reward is meaningful across the trajectory, not only at the terminal step. A
 
 ## Determinism And Grading
 
-Task graders are implemented in `graders.py` and return normalized results in `0.0-1.0`.
+Task graders are implemented in `graders.py` and return normalized results strictly between `0` and `1`.
 
 - `grade_segment(...)` checks exact segmentation correctness
 - `grade_adjust(...)` checks legal adjustment execution and progress
