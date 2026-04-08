@@ -103,8 +103,8 @@ class SorterEnvironment(Environment):
                         {
                             "option_index": index,
                             "position": list(pos),
-                            "projected_score": float(_position_score(state, obj_name, pos)),
-                            "score_delta": float(
+                            "projected_value": float(_position_score(state, obj_name, pos)),
+                            "value_delta": float(
                                 _position_score(state, obj_name, pos) - current_score
                             ),
                         }
