@@ -33,7 +33,7 @@ The environment is designed for agent evaluation rather than low level robotics.
 With increase in population causing decrease of 'Open Spaces' it becomes extremely important to **build societies and localities that can cater to a huge chunk of population** and in such a case, The Sorter Project though being mainly built for industrial application, becomes an extremely useful tool that allows proper space utilisation to accomatodate more people whilst taking minimum space. _(so in the near future we might not have to shift to mars)_
 
 ## Why This Is A Real World Task
-This environment maps to common operations in warehouses, storage rooms, micro fulfillment centers (similiar to the ones used by Zepto, Blinkit, etc), and factory floor inventory areas:
+This environment maps to common operations in warehouses, storage rooms, micro fulfillment centers (similiar to the ones used by [Zepto](https://www.zepto.com/), [Blinkit](https://blinkit.com/), etc), and factory floor inventory areas:
 
 - `segment`: match observed object positions to known SKU metadata
 - `adjust`: move a single misplaced or newly arrived item to a better slot
