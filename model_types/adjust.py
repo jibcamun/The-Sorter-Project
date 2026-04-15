@@ -2,7 +2,7 @@ from typing import Any, Dict, List, Tuple
 
 from pydantic import Field
 
-from .segment_model import PositionTuple
+from .segment import PositionTuple
 
 
 AdjustActionPayload = Tuple[str, int] | Tuple[()]

@@ -2,7 +2,7 @@ from typing import Dict
 
 from pydantic import Field
 
-from .segment_model import PositionTuple
+from .segment import PositionTuple
 
 
 PlaceActionPayload = Dict[str, PositionTuple]

@@ -5,17 +5,17 @@ from openenv.core.env_server.types import Action, Observation, State
 from pydantic import Field, field_serializer
 
 try:
-    from .model_types.adjust_model import AdjustActionMixin, AdjustObservationMixin
-    from .model_types.place_model import PlaceActionMixin, PlaceObservationMixin
-    from .model_types.segment_model import (
+    from .model_types.adjust import AdjustActionMixin, AdjustObservationMixin
+    from .model_types.place import PlaceActionMixin, PlaceObservationMixin
+    from .model_types.segment import (
         PositionTuple,
         SegmentActionMixin,
         SegmentObservationMixin,
     )
 except ImportError:
-    from model_types.adjust_model import AdjustActionMixin, AdjustObservationMixin
-    from model_types.place_model import PlaceActionMixin, PlaceObservationMixin
-    from model_types.segment_model import (
+    from model_types.adjust import AdjustActionMixin, AdjustObservationMixin
+    from model_types.place import PlaceActionMixin, PlaceObservationMixin
+    from model_types.segment import (
         PositionTuple,
         SegmentActionMixin,
         SegmentObservationMixin,
