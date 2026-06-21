@@ -426,8 +426,6 @@ sorter/
 ├── tasks/                   # Segment, adjust, and place task logic
 ├── utils/                   # Grid and reward helpers
 ├── client.py                # Client utilities
-├── graders.py               # Deterministic task graders
-├── inference.py             # Baseline agent
 ├── openenv.yaml             # OpenEnv metadata
 ├── Dockerfile               # Container build configuration
 ├── validate-submission.sh   # Validation script
@@ -471,9 +469,7 @@ sorter/
 ## Links
 
 Hugging Face Repository: https://huggingface.co/spaces/Jibrann/sorter
-
 Hugging Face Space: https://jibrann-sorter.hf.space
-
 GitHub Repository: https://github.com/jibcamun/The-Sorter-Project
 
 ## Related Work
