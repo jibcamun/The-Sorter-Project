@@ -468,9 +468,9 @@ sorter/
 
 ## Links
 
-Hugging Face Repository: https://huggingface.co/spaces/Jibrann/sorter
-Hugging Face Space: https://jibrann-sorter.hf.space
-GitHub Repository: https://github.com/jibcamun/The-Sorter-Project
+Hugging Face Repository: https://huggingface.co/spaces/Jibrann/sorter <br>
+Hugging Face Space: https://jibrann-sorter.hf.space <br>
+GitHub Repository: https://github.com/jibcamun/The-Sorter-Project <br>
 
 ## Related Work
 
